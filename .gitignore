@@ -1,0 +1,85 @@
+# ───────────────────────────────
+# Python
+# ───────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+*.whl
+
+# 가상환경
+venv/
+env/
+.venv/
+.env/
+
+# 환경변수 (API 키 노출 방지 - 절대 커밋 금지!)
+.env
+backend/.env
+
+# ───────────────────────────────
+# AI / ML 모델 캐시
+# ───────────────────────────────
+*.pt
+*.pth
+*.onnx
+*.weights
+__pycache__/
+.cache/
+torch_cache/
+
+# ───────────────────────────────
+# Node.js / Next.js
+# ───────────────────────────────
+node_modules/
+.next/
+out/
+.nuxt/
+.cache/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# 환경변수
+frontend/.env.local
+frontend/.env.development.local
+frontend/.env.test.local
+frontend/.env.production.local
+
+# ───────────────────────────────
+# macOS
+# ───────────────────────────────
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# ───────────────────────────────
+# IDE
+# ───────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ───────────────────────────────
+# 테스트 / 커버리지
+# ───────────────────────────────
+.pytest_cache/
+htmlcov/
+.coverage
+coverage.xml
+
+# ───────────────────────────────
+# 기타
+# ───────────────────────────────
+*.log
+*.tmp

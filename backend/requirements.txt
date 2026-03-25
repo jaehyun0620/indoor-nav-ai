@@ -1,0 +1,19 @@
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+python-multipart>=0.0.9
+httpx>=0.27.0
+python-dotenv>=1.0.0
+
+# AI/ML
+ultralytics>=8.1.0
+torch>=2.2.0
+torchvision>=0.17.0
+opencv-python>=4.9.0
+numpy>=1.26.0
+Pillow>=10.2.0
+
+# OCR
+easyocr>=1.7.1
+
+# TTS (선택)
+gTTS>=2.5.0

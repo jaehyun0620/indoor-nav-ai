@@ -1,0 +1,114 @@
+"""
+consistency_filter.py
+VLM 응답의 일관성을 검증하는 필터.
+deque(maxlen=3) 버퍼 + TTL 3초 + 다수결(2/3) 방향 확정.
+"""
+
+from collections import deque, Counter
+import time
+from typing import Tuple
+
+
+class ConsistencyFilter:
+    def __init__(
+        self,
+        buffer_size: int = 3,
+        agree_threshold: int = 2,
+        conf_min: float = 0.6,
+        ttl: float = 3.0,
+    ):
+        """
+        Parameters
+        ----------
+        buffer_size : int
+            최근 응답을 저장할 버퍼 크기 (기본 3)
+        agree_threshold : int
+            방향 확정에 필요한 최소 일치 횟수 (기본 2, 즉 3회 중 2회)
+        conf_min : float
+            이 값 미만의 confidence는 direction을 unknown으로 처리 (기본 0.6)
+        ttl : float
+            버퍼 항목 유효 시간 (초, 기본 3.0). 초과 항목은 유효하지 않음
+        """
+        self.buffer: deque = deque(maxlen=buffer_size)
+        self.agree_threshold = agree_threshold
+        self.conf_min = conf_min
+        self.ttl = ttl
+        self.unknown_streak: int = 0
+
+    def add(self, direction: str, confidence: float) -> None:
+        """
+        VLM 응답 하나를 버퍼에 추가한다.
+
+        Parameters
+        ----------
+        direction : str
+            VLM이 반환한 goal_direction ("left" / "right" / "straight" / "unknown")
+        confidence : float
+            VLM이 반환한 confidence (0.0 ~ 1.0)
+        """
+        if confidence < self.conf_min:
+            direction = "unknown"
+
+        self.buffer.append(
+            {
+                "direction": direction,
+                "confidence": confidence,
+                "timestamp": time.time(),
+            }
+        )
+
+    def get_guidance(self) -> Tuple[str, str]:
+        """
+        버퍼 내 유효 응답을 기반으로 확정 방향과 TTS 텍스트를 반환한다.
+
+        Returns
+        -------
+        Tuple[str, str]
+            (confirmed_direction, tts_text)
+            confirmed_direction: "left" / "right" / "straight" / "unknown"
+            tts_text: 사용자에게 읽어줄 한국어 문장
+        """
+        now = time.time()
+        valid = [r for r in self.buffer if now - r["timestamp"] < self.ttl]
+
+        # 유효 응답 부족
+        if len(valid) < self.agree_threshold:
+            return "unknown", "아직 분석 중입니다"
+
+        directions = [r["direction"] for r in valid]
+        counter = Counter(directions)
+        top_dir, top_count = counter.most_common(1)[0]
+
+        if top_count >= self.agree_threshold:
+            if top_dir == "unknown":
+                return self._handle_unknown()
+            self.unknown_streak = 0
+            return top_dir, self._to_korean(top_dir)
+
+        return self._handle_unknown()
+
+    def _handle_unknown(self) -> Tuple[str, str]:
+        """unknown 연속 횟수에 따라 단계별 유도 메시지를 반환한다."""
+        self.unknown_streak += 1
+        if self.unknown_streak == 1:
+            return "unknown", "잠시 기다려주세요"
+        elif self.unknown_streak == 2:
+            return "unknown", "카메라를 천천히 움직여주세요"
+        else:
+            self.unknown_streak = 0
+            return "unknown", "주변을 천천히 둘러보세요"
+
+    def _to_korean(self, direction: str) -> str:
+        """영문 방향을 한국어 안내 문장으로 변환한다."""
+        mapping = {
+            "left": "왼쪽",
+            "right": "오른쪽",
+            "straight": "직진",
+        }
+        kor = mapping.get(direction, direction)
+        return f"목적지는 {kor} 방향입니다"
+
+    def reset(self) -> None:
+        """버퍼와 unknown_streak을 초기화한다."""
+        self.buffer.clear()
+        self.unknown_streak = 0
