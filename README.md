@@ -3,7 +3,7 @@
 
 ---
 
-## 📌 프로젝트 개요
+##  프로젝트 개요
 
 스마트폰 카메라로 건물 복도를 비추면, AI가 실시간으로 장애물을 감지하고 목적지 방향을 **한국어 음성**으로 안내하는 시스템입니다.
 
@@ -11,7 +11,7 @@
 
 ---
 
-## 🎯 확정 범위
+##  확정 범위
 
 | 항목 | 내용 |
 |------|------|
@@ -22,7 +22,7 @@
 
 ---
 
-## 🏗️ 시스템 구조
+##  시스템 구조
 
 카메라 프레임이 들어오면 두 채널이 병렬로 동작합니다.
 
@@ -126,39 +126,6 @@ capstone/
     └── package.json
 ```
 
----
-
-## 🚀 실행 방법
-
-### 백엔드
-
-```bash
-cd backend
-python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
-pip install -r requirements.txt
-
-# 환경변수 설정
-cp .env.example .env
-# .env 파일에 API 키 입력
-
-uvicorn main:app --reload --port 8000
-```
-
-### 프론트엔드
-
-```bash
-cd frontend
-npm install
-
-# 환경변수 설정
-cp .env.local.example .env.local
-# .env.local 파일에 API 주소 입력
-
-npm run dev
-```
-
-브라우저에서 `http://localhost:3000` 접속
 
 ---
 
