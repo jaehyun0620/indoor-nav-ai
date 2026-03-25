@@ -63,9 +63,14 @@ class PriorityModule:
             }
 
         if self.CRITICAL_DISTANCE <= distance < self.CAUTION_DISTANCE:
+            caution = f"주의: {obj_class} {distance:.1f}m 앞"
+            if direction and direction != "unknown":
+                combined = f"{caution}, {tts_text}"
+            else:
+                combined = caution
             return {
                 "message_type": "caution",
-                "tts_text": f"주의: {obj_class} {distance:.1f}m 앞",
+                "tts_text": combined,
                 "priority": 1,
                 "suppress_guidance": False,
             }
