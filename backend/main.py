@@ -1,12 +1,20 @@
 """
 main.py
 FastAPI 서버 진입점.
+
 빠른 채널(YOLOv8+MiDaS)과 느린 채널(VLM)을 통합하고
 우선순위 판단 모듈을 거쳐 최종 TTS 메시지를 반환한다.
+
+WebSocket /ws/navigate 가 핵심 엔드포인트:
+  - 클라이언트가 접속하면 네비게이션 세션이 시작된다.
+  - 1초마다 프레임을 전송하면 안내 메시지를 돌려받는다.
+  - 도착 판정 시 "arrived" 메시지를 보내고 세션을 종료한다.
 """
 
 import asyncio
+import base64
 import os
+import time
 from contextlib import asynccontextmanager
 from typing import Optional
 
@@ -19,6 +27,7 @@ load_dotenv()
 
 from backend.channels.fast_channel import FastChannel
 from backend.channels.slow_channel import SlowChannel
+from backend.modules.navigation_session import NavigationSession
 from backend.modules.priority_module import PriorityModule
 from backend.modules.scene_memory import SceneMemory
 
@@ -27,10 +36,7 @@ from backend.modules.scene_memory import SceneMemory
 fast_channel: Optional[FastChannel] = None
 slow_channel: Optional[SlowChannel] = None
 priority_module = PriorityModule()
-scene_memory = SceneMemory()
 
-# 느린 채널 쿨다운 제어 (2~3초 주기)
-_last_slow_time: float = 0.0
 SLOW_CHANNEL_INTERVAL: float = float(os.getenv("SLOW_CHANNEL_INTERVAL", "2.5"))
 
 
@@ -62,16 +68,93 @@ app.add_middleware(
 )
 
 
-# ── REST 엔드포인트 ─────────────────────────────────────────────────────────
+# ── 내부 헬퍼 ────────────────────────────────────────────────────────────────
+
+def _resize_for_vlm(image_bytes: bytes) -> bytes:
+    """VLM 전송용으로 이미지를 축소한다. 비용 절감 목적."""
+    import cv2
+    import numpy as np
+    size = int(os.getenv("VLM_IMAGE_SIZE", "320"))
+    buf = np.frombuffer(image_bytes, dtype=np.uint8)
+    img = cv2.imdecode(buf, cv2.IMREAD_COLOR)
+    if img is None:
+        return image_bytes
+    h, w = img.shape[:2]
+    if w <= size:
+        return image_bytes
+    ratio = size / w
+    resized = cv2.resize(img, (size, int(h * ratio)))
+    _, enc = cv2.imencode(".jpg", resized, [cv2.IMWRITE_JPEG_QUALITY, 70])
+    return enc.tobytes()
+
+
+def _process_frame(image_bytes: bytes, target: str, last_slow_time: float, scene_memory: SceneMemory):
+    """
+    프레임 1장을 빠른/느린 채널에 통과시켜 결과를 반환한다.
+
+    Returns
+    -------
+    dict: fast_result, slow_result, yolo_context, detections, raw_vlm, new_slow_time
+    """
+    # 빠른 채널
+    fast_output = fast_channel.process_bytes(image_bytes)
+    fast_result = fast_output["fast_result"]
+    yolo_context = fast_output["yolo_context"]
+    detections = fast_output["detections"]
+
+    # scene_memory 컨텍스트를 프롬프트에 추가
+    memory_hint = scene_memory.get_context_for_prompt()
+    enriched_context = f"{yolo_context}\n{memory_hint}".strip() if memory_hint else yolo_context
+
+    # 느린 채널 (쿨다운 + 장면 변화 감지)
+    raw_vlm = {}
+    now = time.time()
+    last_context = getattr(scene_memory, "_last_vlm_context", None)
+    context_changed = last_context != yolo_context
+
+    if now - last_slow_time >= SLOW_CHANNEL_INTERVAL and context_changed:
+        scene_memory._last_vlm_context = yolo_context
+        small_image = _resize_for_vlm(image_bytes)
+        slow_result = slow_channel.process(small_image, enriched_context, target)
+        raw_vlm = slow_result.get("raw", {})
+        new_slow_time = now
+    else:
+        confirmed_dir, tts_text = slow_channel.filter.get_guidance()
+        slow_result = {
+            "confirmed_direction": confirmed_dir,
+            "tts_text": tts_text,
+            "unknown_streak": slow_channel.filter.unknown_streak,
+            "raw": {},
+        }
+        new_slow_time = last_slow_time
+
+    scene_memory.update(detections, raw_vlm)
+
+    return {
+        "fast_result": fast_result,
+        "slow_result": slow_result,
+        "yolo_context": yolo_context,
+        "detections": detections,
+        "raw_vlm": raw_vlm,
+        "new_slow_time": new_slow_time,
+    }
+
+
+# ── REST 엔드포인트 (단발성 테스트용) ───────────────────────────────────────
 
 class NavigationResponse(BaseModel):
-    message_type: str       # warning / caution / guidance / unknown
+    message_type: str
     tts_text: str
     priority: int
     suppress_guidance: bool
+    arrived: bool = False
     detections: list
     yolo_context: str
     slow_raw: dict
+
+
+_rest_slow_time: float = 0.0
+_rest_scene_memory = SceneMemory()
 
 
 @app.post("/navigate", response_model=NavigationResponse)
@@ -80,126 +163,158 @@ async def navigate(
     target: str = Form("화장실"),
 ):
     """
-    카메라 프레임 1장을 받아 TTS 안내 메시지를 반환한다.
-
-    - frame: JPEG/PNG 이미지
-    - target: 목표물 ("강의실" / "화장실" / "엘리베이터")
+    단발성 테스트용 REST 엔드포인트.
+    실제 서비스는 WebSocket /ws/navigate 를 사용한다.
     """
-    import time
-
-    global _last_slow_time
+    global _rest_slow_time
 
     image_bytes = await frame.read()
+    result = _process_frame(image_bytes, target, _rest_slow_time, _rest_scene_memory)
+    _rest_slow_time = result["new_slow_time"]
 
-    # ── 빠른 채널 (매 요청마다 실행) ───────────────────────────────────────
-    fast_output = fast_channel.process_bytes(image_bytes)
-    fast_result = fast_output["fast_result"]
-    yolo_context = fast_output["yolo_context"]
-    detections = fast_output["detections"]
-
-    # ── 느린 채널 (쿨다운 적용) ────────────────────────────────────────────
-    now = time.time()
-    if now - _last_slow_time >= SLOW_CHANNEL_INTERVAL:
-        _last_slow_time = now
-        slow_result = slow_channel.process(image_bytes, yolo_context, target)
-    else:
-        # 쿨다운 중: 마지막 필터 상태 재사용
-        confirmed_dir, tts_text = slow_channel.filter.get_guidance()
-        slow_result = {
-            "confirmed_direction": confirmed_dir,
-            "tts_text": tts_text,
-            "unknown_streak": slow_channel.filter.unknown_streak,
-            "raw": {},
-        }
-
-    # SceneMemory 업데이트
-    scene_memory.update(detections, slow_result.get("raw", {}))
-
-    # ── 우선순위 판단 ──────────────────────────────────────────────────────
-    decision = priority_module.decide(fast_result, slow_result)
+    decision = priority_module.decide(result["fast_result"], result["slow_result"])
 
     return NavigationResponse(
         message_type=decision["message_type"],
         tts_text=decision["tts_text"],
         priority=decision["priority"],
         suppress_guidance=decision["suppress_guidance"],
-        detections=detections,
-        yolo_context=yolo_context,
-        slow_raw=slow_result.get("raw", {}),
+        detections=result["detections"],
+        yolo_context=result["yolo_context"],
+        slow_raw=result["raw_vlm"],
     )
 
 
 @app.post("/reset")
 async def reset_session():
-    """세션(일관성 필터 + SceneMemory)을 초기화한다."""
+    """REST 세션 초기화."""
+    global _rest_slow_time
     slow_channel.reset()
-    scene_memory.reset()
+    _rest_scene_memory.reset()
+    _rest_slow_time = 0.0
     return {"status": "reset"}
 
 
-# ── WebSocket 엔드포인트 ─────────────────────────────────────────────────────
+# ── WebSocket 엔드포인트 (지속 네비게이션) ───────────────────────────────────
 
 @app.websocket("/ws/navigate")
 async def ws_navigate(websocket: WebSocket):
     """
-    WebSocket으로 Base64 인코딩된 프레임을 받아 실시간 안내를 반환한다.
+    지속 네비게이션 WebSocket 엔드포인트.
 
-    메시지 형식 (클라이언트 → 서버):
-        JSON: { "frame": "<base64>", "target": "화장실" }
+    ── 클라이언트 → 서버 메시지 형식 ──
+    시작:  { "action": "start",  "target": "화장실" }
+    프레임: { "action": "frame",  "frame": "<base64>", "target": "화장실" }
+    중지:  { "action": "stop" }
 
-    메시지 형식 (서버 → 클라이언트):
-        JSON: NavigationResponse 형태
+    ── 서버 → 클라이언트 메시지 형식 ──
+    일반:  { "message_type": "guidance"|"caution"|"warning"|"unknown",
+             "tts_text": "...", "priority": 1~3,
+             "arrived": false, "progress": "..." }
+    도착:  { "message_type": "arrived", "tts_text": "화장실에 도착했습니다.",
+             "arrived": true }
+    시작확인: { "message_type": "started", "tts_text": "화장실 안내를 시작합니다" }
+    중지확인: { "message_type": "stopped", "tts_text": "안내를 중지했습니다" }
     """
-    import json
-    import time
-
-    global _last_slow_time
-
     await websocket.accept()
+
+    session = NavigationSession()
+    scene_memory = SceneMemory()
+    last_slow_time: float = 0.0
+
     try:
         while True:
             data = await websocket.receive_json()
+            action = data.get("action", "frame")
+
+            # ── 세션 시작 ───────────────────────────────────────────────────
+            if action == "start":
+                target = data.get("target", "화장실")
+                session.start(target)
+                slow_channel.reset()
+                scene_memory.reset()
+                last_slow_time = 0.0
+                await websocket.send_json({
+                    "message_type": "started",
+                    "tts_text": f"{target} 안내를 시작합니다",
+                    "arrived": False,
+                    "progress": "",
+                })
+                continue
+
+            # ── 세션 중지 ───────────────────────────────────────────────────
+            if action == "stop":
+                session.stop()
+                await websocket.send_json({
+                    "message_type": "stopped",
+                    "tts_text": "안내를 중지했습니다",
+                    "arrived": False,
+                    "progress": "",
+                })
+                break
+
+            # ── 프레임 처리 ─────────────────────────────────────────────────
+            if not session.is_navigating:
+                continue
+
             b64_frame = data.get("frame", "")
-            target = data.get("target", "화장실")
+            target = data.get("target", session.target)
 
-            # 빠른 채널
-            fast_output = fast_channel.process_base64(b64_frame)
-            fast_result = fast_output["fast_result"]
-            yolo_context = fast_output["yolo_context"]
-            detections = fast_output["detections"]
+            # base64 → bytes
+            raw_b64 = b64_frame.split(",", 1)[-1] if "," in b64_frame else b64_frame
+            image_bytes = base64.b64decode(raw_b64)
 
-            # 느린 채널 (쿨다운)
-            now = time.time()
-            if now - _last_slow_time >= SLOW_CHANNEL_INTERVAL:
-                _last_slow_time = now
-                import base64 as _b64
-                raw_b64 = b64_frame.split(",", 1)[-1] if "," in b64_frame else b64_frame
-                image_bytes = _b64.b64decode(raw_b64)
-                slow_result = slow_channel.process(image_bytes, yolo_context, target)
-            else:
-                confirmed_dir, tts_text = slow_channel.filter.get_guidance()
-                slow_result = {
-                    "confirmed_direction": confirmed_dir,
-                    "tts_text": tts_text,
-                    "unknown_streak": slow_channel.filter.unknown_streak,
-                    "raw": {},
-                }
+            # 채널 처리
+            result = _process_frame(image_bytes, target, last_slow_time, scene_memory)
+            last_slow_time = result["new_slow_time"]
 
-            scene_memory.update(detections, slow_result.get("raw", {}))
-            decision = priority_module.decide(fast_result, slow_result)
+            confirmed_dir = result["slow_result"].get("confirmed_direction", "unknown")
+            session.update_direction(confirmed_dir)
+
+            # 우선순위 판단
+            decision = priority_module.decide(result["fast_result"], result["slow_result"])
+
+            # 도착 판정 (VLM이 실행된 경우에만)
+            raw_vlm = result["raw_vlm"]
+            if raw_vlm:
+                arrived = session.check_arrival(
+                    goal_visible=raw_vlm.get("goal_visible", False),
+                    goal_distance_str=str(raw_vlm.get("goal_distance", "unknown")),
+                    confidence=float(raw_vlm.get("confidence", 0.0)),
+                )
+                if arrived:
+                    await websocket.send_json({
+                        "message_type": "arrived",
+                        "tts_text": session.arrival_message(),
+                        "priority": 1,
+                        "suppress_guidance": True,
+                        "arrived": True,
+                        "progress": "",
+                        "yolo_context": result["yolo_context"],
+                    })
+                    session.stop()
+                    break
+
+            # 진행 피드백 (방향 안내 중일 때만 대체)
+            progress = session.get_progress_feedback(confirmed_dir)
+            tts_out = decision["tts_text"]
+            if progress and decision["message_type"] == "guidance":
+                tts_out = progress
 
             await websocket.send_json({
                 "message_type": decision["message_type"],
-                "tts_text": decision["tts_text"],
+                "tts_text": tts_out,
                 "priority": decision["priority"],
                 "suppress_guidance": decision["suppress_guidance"],
-                "yolo_context": yolo_context,
+                "arrived": False,
+                "progress": progress,
+                "yolo_context": result["yolo_context"],
             })
 
     except WebSocketDisconnect:
-        pass
+        session.stop()
 
 
 @app.get("/health")
 async def health():
-    return {"status": "ok"}
+    return {"status": "ok", "model_loaded": fast_channel is not None}

@@ -67,7 +67,7 @@ class VLMClient:
         b64 = base64.b64encode(image_bytes).decode("utf-8")
         payload = {
             "model": self.model,
-            "max_tokens": 300,
+            "max_tokens": 150,
             "messages": [
                 {
                     "role": "user",
@@ -112,7 +112,7 @@ class VLMClient:
                     ]
                 }
             ],
-            "generationConfig": {"maxOutputTokens": 300},
+            "generationConfig": {"maxOutputTokens": 150},
         }
         url = (
             f"https://generativelanguage.googleapis.com/v1beta/models/"

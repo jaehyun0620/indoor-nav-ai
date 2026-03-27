@@ -115,6 +115,23 @@ class SceneMemory:
         summary = ", ".join(f"{cls}({cnt}회)" for cls, cnt in counter.most_common(5))
         return f"최근 탐지: {summary}"
 
+    def get_context_for_prompt(self) -> str:
+        """
+        최근 확정 방향 이력을 프롬프트 보강용 텍스트로 반환한다.
+        느린 채널 프롬프트에 주입해 VLM이 방향 일관성을 유지하도록 돕는다.
+
+        Returns
+        -------
+        str
+            예: "이전 분석에서 목적지는 왼쪽으로 확인됨. 현재도 왼쪽인지 재확인해줘."
+            이력 없으면 빈 문자열.
+        """
+        last = self.get_last_direction()
+        if not last:
+            return ""
+        label = {"left": "왼쪽", "right": "오른쪽", "straight": "직진"}.get(last, last)
+        return f"이전 분석에서 목적지는 {label}으로 확인됨. 현재도 {label}인지 재확인해줘."
+
     def reset(self) -> None:
         """버퍼를 초기화한다."""
         self._buffer.clear()
