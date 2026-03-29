@@ -1,0 +1,35 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    /* 모바일 스크롤 바운스 방지 */
+    overscroll-behavior: none;
+  }
+  body {
+    @apply bg-gray-950 text-white;
+    /* 시각장애인 접근성: 기본 폰트 크기 유지 */
+    font-size: 16px;
+    -webkit-tap-highlight-color: transparent;
+  }
+}
+
+@layer utilities {
+  /* 방향 화살표 컨테이너 */
+  .direction-arrow {
+    filter: drop-shadow(0 0 16px currentColor);
+  }
+  /* 카메라 가이드라인 */
+  .camera-guide::before,
+  .camera-guide::after {
+    content: "";
+    @apply absolute border-white/20 border-2;
+  }
+  /* 글래스모피즘 카드 */
+  .glass-card {
+    background: rgba(255, 255, 255, 0.04);
+    backdrop-filter: blur(12px);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+  }
+}
