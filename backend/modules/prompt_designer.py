@@ -94,6 +94,7 @@ def build_prompt(
     str
         완성된 프롬프트 문자열
     """
+    # 매핑에 없으면 사용자가 말한 그대로 사용
     target_desc = TARGET_KO_TO_DESC.get(target, target)
 
     if condition == "baseline":

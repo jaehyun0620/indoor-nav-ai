@@ -10,11 +10,21 @@ const WS_URL = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000")
 
 const CAPTURE_INTERVAL_MS = 1000;
 
-const TARGETS = [
-  { id: "화장실", label: "화장실", icon: "🚻" },
-  { id: "강의실", label: "강의실", icon: "📚" },
-  { id: "엘리베이터", label: "엘리베이터", icon: "🛗" },
+// 빠른 선택용 프리셋 (눌러도 되고, 음성으로 말해도 됨)
+const PRESET_TARGETS = [
+  { id: "화장실", icon: "🚻" },
+  { id: "강의실", icon: "📚" },
+  { id: "엘리베이터", icon: "🛗" },
 ];
+
+// STT 결과에서 목적지 추출 — 탐색 동사 제거 후 핵심 명사만 남김
+const NAV_VERBS = ["찾아줘", "가고싶어", "가고 싶어", "어디야", "알려줘", "데려다줘", "가자", "찾아", "가줘", "알려", "보여줘", "어디에", "어디로"];
+function extractTarget(text) {
+  let t = text.trim();
+  for (const v of NAV_VERBS) t = t.replace(v, "").trim();
+  // 빈 문자열이면 null 반환
+  return t.length >= 1 ? t : null;
+}
 
 // ── 방향 화살표 SVG ─────────────────────────────────────────────────────────
 function DirectionArrow({ direction }) {
@@ -211,7 +221,7 @@ export default function HomePage() {
   const wsRef = useRef(null);
   const intervalRef = useRef(null);
 
-  const [target, setTarget] = useState("화장실");
+  const [target, setTarget] = useState("");
   const [status, setStatus] = useState("목적지를 선택하고 시작하세요");
   const [isRunning, setIsRunning] = useState(false);
   const [lastDecision, setLastDecision] = useState(null);
@@ -225,13 +235,13 @@ export default function HomePage() {
     useSTT();
   const { speak, isSpeaking } = useTTS();
 
-  // STT 결과로 목적지 변경
+  // STT 결과로 목적지 변경 (자유 입력)
   useEffect(() => {
     if (!transcript) return;
-    const found = TARGETS.find((t) => transcript.includes(t.id));
-    if (found) {
-      setTarget(found.id);
-      speak(`목적지를 ${found.label}(으)로 설정했습니다`);
+    const extracted = extractTarget(transcript);
+    if (extracted) {
+      setTarget(extracted);
+      speak(`목적지를 ${extracted}(으)로 설정했습니다`);
       resetSTT();
     }
   }, [transcript, speak, resetSTT]);
@@ -398,7 +408,7 @@ export default function HomePage() {
   }, [stopCamera]);
 
   const currentDirection = lastDecision?.goal_direction ?? null;
-  const targetInfo = TARGETS.find((t) => t.id === target);
+  const presetInfo = PRESET_TARGETS.find((t) => t.id === target);
 
   return (
     <main className="min-h-screen bg-gray-950 flex flex-col items-center pb-8 select-none">
@@ -436,26 +446,54 @@ export default function HomePage() {
 
       <div className="w-full max-w-lg px-4 flex flex-col gap-4">
 
-        {/* ── 목적지 선택 ── */}
-        <section aria-label="목적지 선택">
+        {/* ── 목적지 설정 ── */}
+        <section aria-label="목적지 설정">
           <p className="text-xs text-gray-500 mb-2 uppercase tracking-wide">목적지</p>
-          <div className="grid grid-cols-3 gap-2">
-            {TARGETS.map((t) => (
+
+          {/* 현재 목적지 표시 + 텍스트 입력 */}
+          <div className={`flex items-center gap-3 rounded-2xl border-2 px-4 py-3 transition-colors ${
+            target ? "border-blue-500/60 bg-blue-950/20" : "border-gray-700/60 bg-gray-900/40"
+          }`}>
+            <span className="text-2xl" aria-hidden="true">
+              {presetInfo?.icon ?? "📍"}
+            </span>
+            <input
+              type="text"
+              value={target}
+              onChange={(e) => !isRunning && setTarget(e.target.value)}
+              disabled={isRunning}
+              placeholder='목적지를 말하거나 입력하세요 (예: "301호 찾아줘")'
+              className="flex-1 bg-transparent text-white placeholder-gray-600 text-sm outline-none disabled:opacity-50"
+              aria-label="목적지 직접 입력"
+            />
+            {target && !isRunning && (
+              <button
+                onClick={() => setTarget("")}
+                className="text-gray-600 hover:text-gray-400 text-lg leading-none"
+                aria-label="목적지 초기화"
+              >
+                ✕
+              </button>
+            )}
+          </div>
+
+          {/* 프리셋 빠른 선택 */}
+          <div className="flex gap-2 mt-2">
+            {PRESET_TARGETS.map((t) => (
               <button
                 key={t.id}
                 onClick={() => !isRunning && setTarget(t.id)}
-                aria-pressed={target === t.id}
                 disabled={isRunning}
                 className={[
-                  "flex flex-col items-center gap-1.5 py-3 rounded-2xl border-2 font-semibold transition-all duration-150",
+                  "flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-xs font-medium transition-all",
                   target === t.id
                     ? "border-blue-500 bg-blue-950/60 text-blue-300"
-                    : "border-gray-700/60 bg-gray-900/40 text-gray-400 hover:border-gray-600",
-                  isRunning ? "opacity-40 cursor-not-allowed" : "cursor-pointer active:scale-95",
+                    : "border-gray-700/60 bg-gray-900/40 text-gray-500 hover:border-gray-500 hover:text-gray-300",
+                  isRunning ? "opacity-30 cursor-not-allowed" : "cursor-pointer",
                 ].join(" ")}
               >
-                <span className="text-2xl" aria-hidden="true">{t.icon}</span>
-                <span className="text-sm">{t.label}</span>
+                <span>{t.icon}</span>
+                <span>{t.id}</span>
               </button>
             ))}
           </div>
@@ -499,7 +537,7 @@ export default function HomePage() {
                     REC
                   </span>
                   <span className="text-xs text-white/70 font-mono">{elapsedTime}</span>
-                  <span className="text-xs text-white/70">{targetInfo?.icon} {target}</span>
+                  <span className="text-xs text-white/70">{presetInfo?.icon ?? "📍"} {target}</span>
                 </div>
 
                 {/* 경고 시 카메라 테두리 강조 */}
@@ -538,7 +576,7 @@ export default function HomePage() {
           <div className="glass-card rounded-2xl px-6 py-6 text-center border border-blue-500/30 animate-slide-up">
             <div className="text-4xl mb-2">🎉</div>
             <p className="text-blue-300 text-xl font-bold">
-              {targetInfo?.icon} {target}에 도착했습니다!
+              {presetInfo?.icon ?? "📍"} {target}에 도착했습니다!
             </p>
             <p className="text-gray-500 text-sm mt-1">목적지에 도달했습니다</p>
             <button
@@ -556,7 +594,9 @@ export default function HomePage() {
         {/* ── idle 상태 안내 텍스트 ── */}
         {!isRunning && navState !== "arrived" && (
           <p className="text-center text-gray-500 text-sm px-4">
-            {status}
+            {!target.trim()
+              ? '🎙 음성 버튼을 눌러 목적지를 말해보세요'
+              : status}
           </p>
         )}
 
@@ -567,15 +607,17 @@ export default function HomePage() {
 
         {/* ── 컨트롤 ── */}
         <div className="flex items-center justify-center gap-6 mt-2">
-          {/* 음성 목적지 입력 */}
+          {/* 음성 목적지 입력 — 항상 사용 가능 */}
           <div className="flex flex-col items-center gap-1.5">
             <VoiceButton
               isListening={isListening}
               onStart={startSTT}
               onStop={stopSTT}
-              disabled={isRunning}
+              disabled={false}
             />
-            <span className="text-xs text-gray-600">음성 입력</span>
+            <span className="text-xs text-gray-600">
+              {isRunning ? "목적지 변경" : "음성 입력"}
+            </span>
           </div>
 
           {/* 안내 시작/중지 */}
@@ -583,13 +625,13 @@ export default function HomePage() {
             <button
               onClick={isRunning ? stopNavigation : startNavigation}
               aria-label={isRunning ? "안내 중지" : "안내 시작"}
-              disabled={navState === "arrived"}
+              disabled={navState === "arrived" || (!isRunning && !target.trim())}
               className={[
                 "w-20 h-20 rounded-full font-bold text-base transition-all duration-200 active:scale-90",
                 "shadow-lg flex items-center justify-center flex-col gap-1",
                 isRunning
                   ? "bg-gray-700 hover:bg-gray-600 shadow-gray-900"
-                  : navState === "arrived"
+                  : !target.trim() || navState === "arrived"
                   ? "bg-gray-800 opacity-40 cursor-not-allowed"
                   : "bg-green-600 hover:bg-green-500 shadow-green-950",
               ].join(" ")}
