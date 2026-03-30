@@ -594,14 +594,47 @@ export default function HomePage() {
         )}
 
         {/* ── 디버그 패널 ── */}
-        {process.env.NODE_ENV === "development" && lastDecision && (
-          <details className="text-xs text-gray-600 mt-1">
-            <summary className="cursor-pointer hover:text-gray-400 transition-colors">
-              디버그 정보
+        {lastDecision && (
+          <details className="text-xs text-gray-600 mt-1 w-full max-w-lg">
+            <summary className="cursor-pointer hover:text-gray-400 transition-colors select-none">
+              🔧 디버그 패널
             </summary>
-            <pre className="mt-2 p-3 bg-gray-900/80 rounded-xl overflow-x-auto text-gray-500 border border-gray-800">
-              {JSON.stringify(lastDecision, null, 2)}
-            </pre>
+            <div className="mt-2 p-3 bg-gray-900/80 rounded-xl border border-gray-800 space-y-2">
+              {lastDecision.debug && (
+                <>
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-gray-400">
+                    <span className="text-gray-600">VLM 호출됨</span>
+                    <span className={lastDecision.debug.vlm_called ? "text-green-400" : "text-gray-600"}>
+                      {lastDecision.debug.vlm_called ? "✅ Yes" : "⏳ 쿨다운"}
+                    </span>
+                    <span className="text-gray-600">VLM 방향</span>
+                    <span className="text-white">{lastDecision.debug.vlm_direction || "—"}</span>
+                    <span className="text-gray-600">VLM 신뢰도</span>
+                    <span className={lastDecision.debug.vlm_confidence >= 0.6 ? "text-green-400" : "text-red-400"}>
+                      {lastDecision.debug.vlm_confidence?.toFixed(2) ?? "—"}
+                    </span>
+                    <span className="text-gray-600">확정 방향</span>
+                    <span className="text-blue-400">{lastDecision.debug.confirmed_direction}</span>
+                    <span className="text-gray-600">필터 버퍼</span>
+                    <span>{lastDecision.debug.filter_buffer_size}/3</span>
+                    <span className="text-gray-600">unknown 연속</span>
+                    <span className={lastDecision.debug.unknown_streak > 0 ? "text-amber-400" : "text-gray-400"}>
+                      {lastDecision.debug.unknown_streak}회
+                    </span>
+                    <span className="text-gray-600">장애물 거리</span>
+                    <span>{lastDecision.debug.obstacle_dist === 999 ? "없음" : `${lastDecision.debug.obstacle_dist?.toFixed(1)}m`}</span>
+                  </div>
+                  {lastDecision.debug.vlm_reasoning && (
+                    <p className="text-gray-500 border-t border-gray-800 pt-2 leading-snug">
+                      💬 {lastDecision.debug.vlm_reasoning}
+                    </p>
+                  )}
+                  <p className="text-gray-700 border-t border-gray-800 pt-2">
+                    YOLO: {lastDecision.yolo_context || "탐지 없음"}
+                  </p>
+                </>
+              )}
+            </div>
           </details>
         )}
 

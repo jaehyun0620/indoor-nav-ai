@@ -13,10 +13,14 @@ WebSocket /ws/navigate 가 핵심 엔드포인트:
 
 import asyncio
 import base64
+import logging
 import os
 import time
 from contextlib import asynccontextmanager
 from typing import Optional
+
+logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s %(message)s", datefmt="%H:%M:%S")
+log = logging.getLogger("nav")
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, UploadFile, WebSocket, WebSocketDisconnect
@@ -111,10 +115,12 @@ def _process_frame(image_bytes: bytes, target: str, last_slow_time: float, scene
     now = time.time()
 
     if now - last_slow_time >= SLOW_CHANNEL_INTERVAL:
+        log.info(f"[SLOW] VLM 호출 시작 | target={target} | context={enriched_context!r}")
         small_image = _resize_for_vlm(image_bytes)
         slow_result = slow_channel.process(small_image, enriched_context, target)
         raw_vlm = slow_result.get("raw", {})
         new_slow_time = now
+        log.info(f"[SLOW] VLM 응답 | dir={raw_vlm.get('goal_direction')} conf={raw_vlm.get('confidence')} | confirmed={slow_result['confirmed_direction']} | tts={slow_result['tts_text']!r}")
     else:
         confirmed_dir, tts_text = slow_channel.filter.get_guidance()
         slow_result = {
@@ -124,7 +130,10 @@ def _process_frame(image_bytes: bytes, target: str, last_slow_time: float, scene
             "raw": {},
         }
         new_slow_time = last_slow_time
+        wait_sec = SLOW_CHANNEL_INTERVAL - (now - last_slow_time)
+        log.info(f"[SLOW] 쿨다운 중 ({wait_sec:.1f}초 후 호출) | 현재={confirmed_dir}")
 
+    log.info(f"[YOLO] {yolo_context!r} | obstacle={fast_result.get('has_obstacle')} dist={fast_result.get('distance_m')}m")
     scene_memory.update(detections, raw_vlm)
 
     return {
@@ -306,6 +315,17 @@ async def ws_navigate(websocket: WebSocket):
                 "arrived": False,
                 "progress": progress,
                 "yolo_context": result["yolo_context"],
+                # 디버그용 데이터
+                "debug": {
+                    "vlm_direction": result["raw_vlm"].get("goal_direction", "-"),
+                    "vlm_confidence": result["raw_vlm"].get("confidence", 0),
+                    "vlm_reasoning": result["raw_vlm"].get("reasoning", ""),
+                    "vlm_called": bool(result["raw_vlm"]),
+                    "confirmed_direction": result["slow_result"].get("confirmed_direction", "unknown"),
+                    "filter_buffer_size": len(slow_channel.filter.buffer),
+                    "unknown_streak": result["slow_result"].get("unknown_streak", 0),
+                    "obstacle_dist": result["fast_result"].get("distance_m", 999),
+                },
             })
 
     except WebSocketDisconnect:
