@@ -121,7 +121,12 @@ class VLMClient:
         with httpx.Client(timeout=20.0) as client:
             resp = client.post(url, json=payload)
         resp.raise_for_status()
-        return resp.json()["candidates"][0]["content"]["parts"][0]["text"]
+        body = resp.json()
+        # safety filter 등으로 candidates가 없는 경우 처리
+        candidates = body.get("candidates", [])
+        if not candidates:
+            raise ValueError(f"Gemini candidates 없음: {body.get('promptFeedback', '')}")
+        return candidates[0]["content"]["parts"][0]["text"]
 
 
 # ── SlowChannel ──────────────────────────────────────────────────────────────

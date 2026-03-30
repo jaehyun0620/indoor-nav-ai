@@ -34,10 +34,10 @@ PROMPT_TEMPLATE = """\
 }}
 
 규칙:
-1. confidence가 0.6 미만이면 goal_direction은 반드시 "unknown"으로 설정하세요.
-2. 탐지된 객체 정보와 모순되는 응답은 금지합니다.
-3. 장애물이 1~2m 이내에 있을 경우 confidence 기준을 0.75로 높여서 판단하세요.
-4. goal_visible이 false이면 goal_direction은 "unknown"으로 설정하세요.
+1. 목표물이 직접 보이지 않더라도, 복도 구조·표지판·화살표 등을 근거로 방향을 추론하세요.
+2. confidence가 0.4 미만일 때만 goal_direction을 "unknown"으로 설정하세요.
+3. 탐지된 객체 정보와 모순되는 응답은 금지합니다.
+4. 장애물이 1~2m 이내에 있을 경우 confidence 기준을 0.6으로 높여서 판단하세요.
 5. reasoning은 반드시 한국어 한 문장으로 작성하세요.\
 """
 
@@ -154,14 +154,10 @@ def parse_vlm_response(response_text: str) -> Dict:
     except json.JSONDecodeError:
         return default
 
-    # confidence < 0.6 이면 direction 강제 unknown (규칙 1)
+    # confidence < 0.4 이면 direction 강제 unknown
     confidence = float(parsed.get("confidence", 0.0))
     direction = parsed.get("goal_direction", "unknown")
-    if confidence < 0.6:
-        direction = "unknown"
-
-    # goal_visible=false 이면 direction 강제 unknown (규칙 4)
-    if not parsed.get("goal_visible", False):
+    if confidence < 0.4:
         direction = "unknown"
 
     return {

@@ -17,7 +17,7 @@ class ConsistencyFilter:
         self,
         buffer_size: int = 3,
         agree_threshold: int = 2,
-        conf_min: float = 0.6,
+        conf_min: float = 0.4,
         ttl: float = 30.0,   # VLM 호출 간격(5초) * 버퍼크기(3) + 여유
     ):
         """
