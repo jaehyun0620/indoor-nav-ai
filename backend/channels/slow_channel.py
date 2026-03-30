@@ -84,7 +84,7 @@ class VLMClient:
                 }
             ],
         }
-        with httpx.Client(timeout=10.0) as client:
+        with httpx.Client(timeout=20.0) as client:
             resp = client.post(
                 "https://api.openai.com/v1/chat/completions",
                 headers={
@@ -118,7 +118,7 @@ class VLMClient:
             f"https://generativelanguage.googleapis.com/v1beta/models/"
             f"{self.model}:generateContent?key={self.api_key}"
         )
-        with httpx.Client(timeout=10.0) as client:
+        with httpx.Client(timeout=20.0) as client:
             resp = client.post(url, json=payload)
         resp.raise_for_status()
         return resp.json()["candidates"][0]["content"]["parts"][0]["text"]

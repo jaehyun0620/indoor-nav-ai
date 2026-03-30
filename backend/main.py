@@ -106,14 +106,11 @@ def _process_frame(image_bytes: bytes, target: str, last_slow_time: float, scene
     memory_hint = scene_memory.get_context_for_prompt()
     enriched_context = f"{yolo_context}\n{memory_hint}".strip() if memory_hint else yolo_context
 
-    # 느린 채널 (쿨다운 + 장면 변화 감지)
+    # 느린 채널 (쿨다운 주기만 체크, 장면 변화 조건 제거)
     raw_vlm = {}
     now = time.time()
-    last_context = getattr(scene_memory, "_last_vlm_context", None)
-    context_changed = last_context != yolo_context
 
-    if now - last_slow_time >= SLOW_CHANNEL_INTERVAL and context_changed:
-        scene_memory._last_vlm_context = yolo_context
+    if now - last_slow_time >= SLOW_CHANNEL_INTERVAL:
         small_image = _resize_for_vlm(image_bytes)
         slow_result = slow_channel.process(small_image, enriched_context, target)
         raw_vlm = slow_result.get("raw", {})

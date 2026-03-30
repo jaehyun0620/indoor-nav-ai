@@ -1,7 +1,10 @@
 """
 consistency_filter.py
 VLM 응답의 일관성을 검증하는 필터.
-deque(maxlen=3) 버퍼 + TTL 3초 + 다수결(2/3) 방향 확정.
+deque(maxlen=3) 버퍼 + TTL 30초 + 다수결(2/3) 방향 확정.
+
+TTL 설계: VLM 호출 간격(기본 5초) * 버퍼크기(3) + 여유 = 30초.
+TTL이 호출 간격보다 짧으면 버퍼가 항상 비어 방향 확정 불가.
 """
 
 from collections import deque, Counter
@@ -15,7 +18,7 @@ class ConsistencyFilter:
         buffer_size: int = 3,
         agree_threshold: int = 2,
         conf_min: float = 0.6,
-        ttl: float = 3.0,
+        ttl: float = 30.0,   # VLM 호출 간격(5초) * 버퍼크기(3) + 여유
     ):
         """
         Parameters
@@ -71,7 +74,7 @@ class ConsistencyFilter:
         now = time.time()
         valid = [r for r in self.buffer if now - r["timestamp"] < self.ttl]
 
-        # 유효 응답 부족
+        # 유효 응답 부족 (버퍼 전체 기준 — TTL 안에 있는 것만 카운트)
         if len(valid) < self.agree_threshold:
             return "unknown", "아직 분석 중입니다"
 
