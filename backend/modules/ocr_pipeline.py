@@ -111,9 +111,14 @@ def read_text(
     bbox: Optional[List[float]] = None,
     languages: List[str] = ("ko", "en"),
     conf_threshold: float = 0.4,
+    preprocess_fallback_threshold: float = 0.5,
 ) -> List[Dict]:
     """
     이미지 (또는 bbox 크롭 영역)에서 텍스트를 인식한다.
+
+    전략: 원본 이미지로 먼저 시도 → 평균 conf가 낮으면 전처리 후 재시도.
+    적응형 이진화가 오히려 깨끗한 이미지를 망가뜨릴 수 있으므로
+    전처리는 fallback으로만 사용한다.
 
     Parameters
     ----------
@@ -124,35 +129,39 @@ def read_text(
     languages : List[str]
         EasyOCR 언어 목록
     conf_threshold : float
-        신뢰도 임계값 (이하는 제외)
+        최종 결과 신뢰도 임계값 (이하는 제외)
+    preprocess_fallback_threshold : float
+        이 값 미만이면 전처리 후 재시도 (기본 0.5)
 
     Returns
     -------
     List[Dict]
-        [
-            {
-                "text": str,
-                "conf": float,
-                "bbox": [[x1,y1],[x2,y1],[x2,y2],[x1,y2]]
-            },
-            ...
-        ]
+        [{"text": str, "conf": float, "bbox": ...}, ...]
     """
     reader = _get_reader(list(languages))
 
-    if bbox is not None:
-        roi = crop_bbox(image, bbox)
-    else:
-        roi = image
+    roi = crop_bbox(image, bbox) if bbox is not None else image
 
-    processed = preprocess(roi)
-    results = reader.readtext(processed)
+    def _run(img: np.ndarray) -> List[Dict]:
+        results = reader.readtext(img)
+        return [
+            {"text": t.strip(), "conf": round(c, 3), "bbox": coords}
+            for coords, t, c in results
+            if c >= conf_threshold and t.strip()
+        ]
 
-    output = []
-    for coords, text, conf in results:
-        if conf < conf_threshold:
-            continue
-        output.append({"text": text.strip(), "conf": round(conf, 3), "bbox": coords})
+    # 1차: 원본 이미지 그대로 시도
+    output = _run(roi)
+    avg_conf = sum(r["conf"] for r in output) / len(output) if output else 0.0
+
+    # 2차: conf 낮으면 전처리 후 재시도
+    if avg_conf < preprocess_fallback_threshold:
+        processed = preprocess(roi)
+        fallback = _run(processed)
+        if fallback:
+            fb_avg = sum(r["conf"] for r in fallback) / len(fallback)
+            if fb_avg > avg_conf:
+                output = fallback
 
     return output
 
