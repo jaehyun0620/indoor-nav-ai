@@ -276,12 +276,53 @@ export default function HomePage() {
     ws.send(JSON.stringify({ action: "frame", frame: b64, target }));
   }, [target]);
 
+  // ── TTS 쿨다운 관리 ─────────────────────────────────────────────────────────
+  const lastSpokenTypeRef = useRef("");
+  const lastSpokenTextRef = useRef("");
+  const lastSpokenAtRef   = useRef(0);
+
+  const speakIfNeeded = useCallback((tts_text, message_type) => {
+    const now = Date.now();
+    const elapsed = now - lastSpokenAtRef.current;
+
+    // 안전 경고는 무조건 즉시 발화
+    if (message_type === "warning" || message_type === "caution" || message_type === "arrived") {
+      speak(tts_text);
+      lastSpokenAtRef.current = now;
+      lastSpokenTextRef.current = tts_text;
+      lastSpokenTypeRef.current = message_type;
+      return;
+    }
+
+    // guidance: 방향이 바뀌거나 8초 지나면 발화
+    if (message_type === "guidance") {
+      if (tts_text !== lastSpokenTextRef.current || elapsed > 8000) {
+        speak(tts_text);
+        lastSpokenAtRef.current = now;
+        lastSpokenTextRef.current = tts_text;
+        lastSpokenTypeRef.current = message_type;
+      }
+      return;
+    }
+
+    // unknown: 15초에 한 번만 발화
+    if (message_type === "unknown") {
+      if (elapsed > 15000) {
+        speak(tts_text);
+        lastSpokenAtRef.current = now;
+        lastSpokenTextRef.current = tts_text;
+        lastSpokenTypeRef.current = message_type;
+      }
+      return;
+    }
+  }, [speak]);
+
   // WebSocket 메시지 처리
   const handleWsMessage = useCallback(
     (data) => {
       setLastDecision(data);
       setStatus(data.tts_text);
-      speak(data.tts_text);
+      speakIfNeeded(data.tts_text, data.message_type);
 
       if (data.message_type === "arrived") {
         clearInterval(intervalRef.current);
@@ -291,7 +332,7 @@ export default function HomePage() {
         setWsConnected(false);
       }
     },
-    [speak, stopCamera]
+    [speakIfNeeded, stopCamera]
   );
 
   // 안내 시작
