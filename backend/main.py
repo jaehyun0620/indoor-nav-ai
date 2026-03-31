@@ -320,6 +320,7 @@ async def ws_navigate(websocket: WebSocket):
                     "vlm_direction": result["raw_vlm"].get("goal_direction", "-"),
                     "vlm_confidence": result["raw_vlm"].get("confidence", 0),
                     "vlm_reasoning": result["raw_vlm"].get("reasoning", ""),
+                    "vlm_goal_distance": result["raw_vlm"].get("goal_distance", "unknown"),
                     "vlm_called": bool(result["raw_vlm"]),
                     "confirmed_direction": result["slow_result"].get("confirmed_direction", "unknown"),
                     "filter_buffer_size": len(slow_channel.filter.buffer),

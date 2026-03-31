@@ -56,7 +56,6 @@ CLASS_KO = {
     "bus": "버스",
     "truck": "트럭",
     "motorcycle": "오토바이",
-    "bicycle": "자전거",
 }
 
 # bbox 수평 위치 → 방향 텍스트 (프레임 폭 기준)

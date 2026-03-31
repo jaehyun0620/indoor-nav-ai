@@ -157,8 +157,8 @@ function StatusCard({ decision }) {
             >
               {typeConfig.badgeText}
             </span>
-            {decision.goal_distance && decision.goal_distance !== "unknown" && (
-              <span className="text-xs text-gray-400">{decision.goal_distance}</span>
+            {decision.debug?.vlm_goal_distance && decision.debug.vlm_goal_distance !== "unknown" && (
+              <span className="text-xs text-gray-400">{decision.debug.vlm_goal_distance}</span>
             )}
           </div>
           <p className={`text-lg font-semibold leading-snug ${typeConfig.text}`}>
@@ -407,7 +407,7 @@ export default function HomePage() {
     };
   }, [stopCamera]);
 
-  const currentDirection = lastDecision?.goal_direction ?? null;
+  const currentDirection = lastDecision?.debug?.confirmed_direction ?? null;
   const presetInfo = PRESET_TARGETS.find((t) => t.id === target);
 
   return (
@@ -563,8 +563,8 @@ export default function HomePage() {
                 {currentDirection === "right" && "우회전 →"}
                 {(currentDirection === "unknown" || !currentDirection) && "—"}
               </span>
-              {lastDecision?.goal_distance && lastDecision.goal_distance !== "unknown" && (
-                <span className="text-sm text-gray-400">{lastDecision.goal_distance}</span>
+              {lastDecision?.debug?.vlm_goal_distance && lastDecision.debug.vlm_goal_distance !== "unknown" && (
+                <span className="text-sm text-gray-400">{lastDecision.debug.vlm_goal_distance}</span>
               )}
             </div>
             <DirectionArrow direction={currentDirection} />
@@ -601,8 +601,8 @@ export default function HomePage() {
         )}
 
         {/* ── 신뢰도 바 ── */}
-        {isRunning && lastDecision?.confidence != null && (
-          <ConfidenceBar confidence={lastDecision.confidence} />
+        {isRunning && lastDecision?.debug?.vlm_confidence != null && (
+          <ConfidenceBar confidence={lastDecision.debug.vlm_confidence} />
         )}
 
         {/* ── 컨트롤 ── */}
@@ -696,6 +696,8 @@ export default function HomePage() {
                     <span className={lastDecision.debug.vlm_confidence >= 0.6 ? "text-green-400" : "text-red-400"}>
                       {lastDecision.debug.vlm_confidence?.toFixed(2) ?? "—"}
                     </span>
+                    <span className="text-gray-600">VLM 거리</span>
+                    <span className="text-gray-400">{lastDecision.debug.vlm_goal_distance || "—"}</span>
                     <span className="text-gray-600">확정 방향</span>
                     <span className="text-blue-400">{lastDecision.debug.confirmed_direction}</span>
                     <span className="text-gray-600">필터 버퍼</span>
