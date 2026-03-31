@@ -315,16 +315,7 @@ export default function HomePage() {
       return;
     }
 
-    // unknown: 15초에 한 번만 발화
-    if (message_type === "unknown") {
-      if (elapsed > 15000) {
-        speak(tts_text);
-        lastSpokenAtRef.current = now;
-        lastSpokenTextRef.current = tts_text;
-        lastSpokenTypeRef.current = message_type;
-      }
-      return;
-    }
+    // unknown: 발화하지 않음 (시작 시 안내 문구로 대체)
   }, [speak]);
 
   // WebSocket 메시지 처리
@@ -358,6 +349,7 @@ export default function HomePage() {
       setNavState("navigating");
       setWsConnected(true);
       setLastDecision(null);
+      speak("분석 후 안내해드리겠습니다");
       intervalRef.current = setInterval(captureAndSend, CAPTURE_INTERVAL_MS);
     };
 
