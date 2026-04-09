@@ -1,6 +1,12 @@
 """
 slow_channel.py
 느린 채널: VLM API 호출 + 일관성 필터 → 방향 안내 (2~3초 주기)
+
+설계 원칙:
+- VLM HTTP 호출은 httpx.AsyncClient 를 사용해 FastAPI 이벤트 루프를 블로킹하지 않는다.
+- 호출 메서드는 모두 async def 로 선언한다.
+- httpx.AsyncClient 는 VLMClient 인스턴스당 하나를 생성해 재사용한다.
+  (매 호출마다 새 클라이언트를 만들면 TCP 연결을 매번 새로 맺어 지연 발생)
 """
 
 import base64
@@ -19,6 +25,8 @@ class VLMClient:
     """
     GPT-4o 또는 Gemini 1.5 Flash API를 호출하는 클라이언트.
     환경변수로 사용할 모델을 선택한다.
+
+    httpx.AsyncClient를 인스턴스 레벨에서 재사용해 TCP 연결 비용을 줄인다.
     """
 
     def __init__(self, provider: Optional[str] = None):
@@ -43,9 +51,12 @@ class VLMClient:
         else:
             raise ValueError(f"지원하지 않는 VLM provider: {self.provider}")
 
-    def call(self, prompt: str, image_bytes: bytes) -> str:
+        # 연결 재사용을 위해 persistent client 생성 (매 호출마다 새로 만들지 않음)
+        self._client = httpx.AsyncClient(timeout=20.0)
+
+    async def call(self, prompt: str, image_bytes: bytes) -> str:
         """
-        VLM API를 호출하여 응답 텍스트를 반환한다.
+        VLM API를 비동기로 호출하여 응답 텍스트를 반환한다.
 
         Parameters
         ----------
@@ -60,14 +71,14 @@ class VLMClient:
             VLM 응답 텍스트 (JSON 문자열 기대)
         """
         if self.provider == "openai":
-            return self._call_openai(prompt, image_bytes)
-        return self._call_gemini(prompt, image_bytes)
+            return await self._call_openai(prompt, image_bytes)
+        return await self._call_gemini(prompt, image_bytes)
 
-    def _call_openai(self, prompt: str, image_bytes: bytes) -> str:
+    async def _call_openai(self, prompt: str, image_bytes: bytes) -> str:
         b64 = base64.b64encode(image_bytes).decode("utf-8")
         payload = {
             "model": self.model,
-            "max_tokens": 150,
+            "max_tokens": 400,          # tts_message 2문장 허용으로 증가
             "messages": [
                 {
                     "role": "user",
@@ -84,19 +95,18 @@ class VLMClient:
                 }
             ],
         }
-        with httpx.Client(timeout=20.0) as client:
-            resp = client.post(
-                "https://api.openai.com/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {self.api_key}",
-                    "Content-Type": "application/json",
-                },
-                json=payload,
-            )
+        resp = await self._client.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+        )
         resp.raise_for_status()
         return resp.json()["choices"][0]["message"]["content"]
 
-    def _call_gemini(self, prompt: str, image_bytes: bytes) -> str:
+    async def _call_gemini(self, prompt: str, image_bytes: bytes) -> str:
         b64 = base64.b64encode(image_bytes).decode("utf-8")
         payload = {
             "contents": [
@@ -112,14 +122,13 @@ class VLMClient:
                     ]
                 }
             ],
-            "generationConfig": {"maxOutputTokens": 150},
+            "generationConfig": {"maxOutputTokens": 400},  # tts_message 2문장 허용으로 증가
         }
         url = (
             f"https://generativelanguage.googleapis.com/v1beta/models/"
             f"{self.model}:generateContent?key={self.api_key}"
         )
-        with httpx.Client(timeout=20.0) as client:
-            resp = client.post(url, json=payload)
+        resp = await self._client.post(url, json=payload)
         resp.raise_for_status()
         body = resp.json()
         # safety filter 등으로 candidates가 없는 경우 처리
@@ -154,7 +163,7 @@ class SlowChannel:
         self.filter = ConsistencyFilter()
         self.condition = condition
 
-    def process(
+    async def process(
         self,
         image_bytes: bytes,
         yolo_context: str,
@@ -185,7 +194,7 @@ class SlowChannel:
         prompt = build_prompt(yolo_context, target, condition=self.condition)
 
         try:
-            raw_text = self.vlm.call(prompt, image_bytes)
+            raw_text = await self.vlm.call(prompt, image_bytes)
         except Exception as e:
             # API 오류 시 unknown 처리
             return {
@@ -197,10 +206,78 @@ class SlowChannel:
 
         parsed = parse_vlm_response(raw_text)
         self.filter.add(parsed["goal_direction"], parsed["confidence"])
-        confirmed_dir, tts_text = self.filter.get_guidance()
+        confirmed_dir, fallback_tts = self.filter.get_guidance()
+
+        # tts_text 결정 규칙:
+        # - confirmed_dir이 unknown이면 필터의 fallback_tts를 사용한다.
+        #   (VLM tts_message가 "왼쪽으로 가세요"여도 필터가 아직 방향을 확정하지 않았으면
+        #    그 메시지를 내보내면 안 됨 → confirmed_dir와 tts_text 불일치 버그 방지)
+        # - confirmed_dir이 실제 방향이면 VLM tts_message를 우선 사용하되,
+        #   없으면 fallback_tts를 사용한다.
+        if confirmed_dir == "unknown":
+            tts_text = fallback_tts
+        else:
+            tts_message = parsed.get("tts_message", "").strip()
+            tts_text = tts_message if tts_message else fallback_tts
 
         return {
             "confirmed_direction": confirmed_dir,
+            "tts_text": tts_text,
+            "unknown_streak": self.filter.unknown_streak,
+            "raw": parsed,
+        }
+
+    async def process_instant(
+        self,
+        image_bytes: bytes,
+        yolo_context: str,
+        target: str,
+    ) -> Dict:
+        """
+        VLM을 1회 호출하고 ConsistencyFilter를 거치지 않고 즉시 결과를 반환한다.
+        사용자가 명시적으로 방향 조회를 요청할 때 사용.
+        필터 버퍼에는 결과를 추가해 이후 연속성 유지.
+
+        Returns
+        -------
+        dict
+            {
+                "confirmed_direction": str,
+                "tts_text": str,
+                "unknown_streak": int,
+                "raw": dict
+            }
+        """
+        prompt = build_prompt(yolo_context, target, condition=self.condition)
+
+        try:
+            raw_text = await self.vlm.call(prompt, image_bytes)
+        except Exception as e:
+            return {
+                "confirmed_direction": "unknown",
+                "tts_text": f"VLM 오류: {str(e)[:60]}",
+                "unknown_streak": self.filter.unknown_streak,
+                "raw": {},
+            }
+
+        parsed = parse_vlm_response(raw_text)
+        # 필터 버퍼에는 추가하되, 결과는 즉시 반환
+        self.filter.add(parsed["goal_direction"], parsed["confidence"])
+
+        direction = parsed["goal_direction"]
+        mapping = {"left": "왼쪽", "right": "오른쪽", "straight": "직진"}
+
+        # VLM이 생성한 자연어 안내문 우선 사용, 없으면 fallback
+        tts_message = parsed.get("tts_message", "").strip()
+        if tts_message:
+            tts_text = tts_message
+        elif direction != "unknown":
+            tts_text = f"목적지는 {mapping.get(direction, direction)} 방향입니다"
+        else:
+            tts_text = "방향을 파악하지 못했습니다"
+
+        return {
+            "confirmed_direction": direction,
             "tts_text": tts_text,
             "unknown_streak": self.filter.unknown_streak,
             "raw": parsed,

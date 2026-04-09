@@ -23,15 +23,17 @@ class FastChannel:
     def __init__(
         self,
         yolo_model: str = "yolov8n.pt",
-        midas_model: str = "MiDaS_small",
+        midas_model: str = "small",
         conf_threshold: float = 0.4,
-        scale_factor: float = 5.0,
+        scale_factor: float = 1.0,
+        depth_interval: int = 5,
     ):
         self.wrapper = YOLOMiDaSWrapper(
             yolo_model=yolo_model,
             midas_model=midas_model,
             conf_threshold=conf_threshold,
             scale_factor=scale_factor,
+            depth_interval=depth_interval,
         )
 
     def process_frame(self, frame_bgr: np.ndarray) -> Dict:

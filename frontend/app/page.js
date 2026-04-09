@@ -228,6 +228,7 @@ export default function HomePage() {
   const [cameraError, setCameraError] = useState(null);
   const [navState, setNavState] = useState("idle");
   const [wsConnected, setWsConnected] = useState(false);
+  const [isQuerying, setIsQuerying] = useState(false);
 
   const elapsedTime = useElapsedTime(isRunning);
 
@@ -286,16 +287,48 @@ export default function HomePage() {
     ws.send(JSON.stringify({ action: "frame", frame: b64, target }));
   }, [target]);
 
+  // VLM 방향 조회 (사용자 요청 시)
+  const queryDirection = useCallback(() => {
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    const ws = wsRef.current;
+    if (!video || !canvas || !ws || ws.readyState !== WebSocket.OPEN) return;
+    if (video.readyState < 2) return;
+    if (isQuerying) return; // 중복 요청 방지
+
+    canvas.width = video.videoWidth || 640;
+    canvas.height = video.videoHeight || 480;
+    canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
+
+    const b64 = canvas.toDataURL("image/jpeg", 0.8);
+    ws.send(JSON.stringify({ action: "query", frame: b64, target }));
+    setIsQuerying(true);
+    speak("분석 중입니다");
+  }, [target, speak, isQuerying]);
+
   // ── TTS 쿨다운 관리 ─────────────────────────────────────────────────────────
   const lastSpokenTypeRef = useRef("");
   const lastSpokenTextRef = useRef("");
   const lastSpokenAtRef   = useRef(0);
 
-  const speakIfNeeded = useCallback((tts_text, message_type) => {
+  /**
+   * speakIfNeeded
+   * @param {string}  tts_text     발화할 텍스트
+   * @param {string}  message_type "warning" | "caution" | "guidance" | "unknown" | "arrived"
+   * @param {boolean} cached       서버가 쿨다운 중 재전송한 캐시 메시지 여부
+   *
+   * 쿨다운 기준
+   *   경고·주의·도착   : 항상 즉시 발화
+   *   guidance (실시간) : 텍스트가 바뀌거나 8초 초과 시 발화
+   *   guidance (캐시)   : 텍스트가 바뀌거나 1500ms 초과 시 발화
+   *                       → 서버가 INTERVAL/2(≈2s) 주기로 보내므로 실제론 ~2s 간격
+   *   unknown           : 발화하지 않음
+   */
+  const speakIfNeeded = useCallback((tts_text, message_type, cached = false) => {
     const now = Date.now();
     const elapsed = now - lastSpokenAtRef.current;
 
-    // 안전 경고는 무조건 즉시 발화
+    // 안전 경고·주의·도착은 무조건 즉시 발화
     if (message_type === "warning" || message_type === "caution" || message_type === "arrived") {
       speak(tts_text);
       lastSpokenAtRef.current = now;
@@ -304,9 +337,11 @@ export default function HomePage() {
       return;
     }
 
-    // guidance: 방향이 바뀌거나 8초 지나면 발화
+    // guidance: 방향이 바뀌거나 쿨다운 초과 시 발화
+    //   실시간 응답 → 8초 / 캐시 재전송 → 1500ms (서버 resend 주기와 맞춤)
     if (message_type === "guidance") {
-      if (tts_text !== lastSpokenTextRef.current || elapsed > 8000) {
+      const threshold = cached ? 1500 : 8000;
+      if (tts_text !== lastSpokenTextRef.current || elapsed > threshold) {
         speak(tts_text);
         lastSpokenAtRef.current = now;
         lastSpokenTextRef.current = tts_text;
@@ -315,15 +350,28 @@ export default function HomePage() {
       return;
     }
 
-    // unknown: 발화하지 않음 (시작 시 안내 문구로 대체)
+    // unknown: 발화하지 않음 (캐시 재전송 시에도 침묵 유지)
   }, [speak]);
 
   // WebSocket 메시지 처리
   const handleWsMessage = useCallback(
     (data) => {
+      // 방향 조회 응답이면 isQuerying 해제
+      if (data.query_response) setIsQuerying(false);
+
       setLastDecision(data);
       setStatus(data.tts_text);
-      speakIfNeeded(data.tts_text, data.message_type);
+
+      // 방향 조회 응답은 항상 즉시 발화 (쿨다운 무시)
+      if (data.query_response) {
+        speak(data.tts_text);
+        lastSpokenAtRef.current = Date.now();
+        lastSpokenTextRef.current = data.tts_text;
+        lastSpokenTypeRef.current = data.message_type;
+      } else {
+        // cached: true → 서버가 쿨다운 중 재전송한 캐시 메시지 (더 짧은 threshold 적용)
+        speakIfNeeded(data.tts_text, data.message_type, data.cached === true);
+      }
 
       if (data.message_type === "arrived") {
         clearInterval(intervalRef.current);
@@ -333,7 +381,7 @@ export default function HomePage() {
         setWsConnected(false);
       }
     },
-    [speakIfNeeded, stopCamera]
+    [speak, speakIfNeeded, stopCamera]
   );
 
   // 안내 시작
@@ -364,12 +412,14 @@ export default function HomePage() {
       setIsRunning(false);
       setNavState("idle");
       setWsConnected(false);
+      setIsQuerying(false);
     };
 
     ws.onclose = () => {
       clearInterval(intervalRef.current);
       setIsRunning(false);
       setWsConnected(false);
+      setIsQuerying(false);
     };
   }, [startCamera, captureAndSend, handleWsMessage, target]);
 
@@ -599,16 +649,16 @@ export default function HomePage() {
 
         {/* ── 컨트롤 ── */}
         <div className="flex items-center justify-center gap-6 mt-2">
-          {/* 음성 목적지 입력 — 항상 사용 가능 */}
+          {/* 음성 버튼 — 대기 중: 목적지 STT / 안내 중: 방향 조회 */}
           <div className="flex flex-col items-center gap-1.5">
             <VoiceButton
-              isListening={isListening}
-              onStart={startSTT}
-              onStop={stopSTT}
+              isListening={isRunning ? isQuerying : isListening}
+              onStart={isRunning ? queryDirection : startSTT}
+              onStop={isRunning ? undefined : stopSTT}
               disabled={false}
             />
             <span className="text-xs text-gray-600">
-              {isRunning ? "목적지 변경" : "음성 입력"}
+              {isRunning ? (isQuerying ? "분석 중..." : "방향 조회") : "음성 입력"}
             </span>
           </div>
 
@@ -680,7 +730,11 @@ export default function HomePage() {
                   <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-gray-400">
                     <span className="text-gray-600">VLM 호출됨</span>
                     <span className={lastDecision.debug.vlm_called ? "text-green-400" : "text-gray-600"}>
-                      {lastDecision.debug.vlm_called ? "✅ Yes" : "⏳ 쿨다운"}
+                      {lastDecision.debug.vlm_called
+                        ? "✅ Yes"
+                        : lastDecision.cached
+                        ? "🔁 캐시 재전송"
+                        : "⏳ 쿨다운"}
                     </span>
                     <span className="text-gray-600">VLM 방향</span>
                     <span className="text-white">{lastDecision.debug.vlm_direction || "—"}</span>

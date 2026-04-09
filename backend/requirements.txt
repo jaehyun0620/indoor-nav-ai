@@ -11,6 +11,7 @@ torchvision>=0.17.0
 opencv-python>=4.9.0
 numpy>=1.26.0
 Pillow>=10.2.0
+transformers>=4.40.0   # Depth Anything V2 Metric
 
 # OCR
 easyocr>=1.7.1
