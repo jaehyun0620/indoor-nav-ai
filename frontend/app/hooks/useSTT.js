@@ -38,21 +38,27 @@ export function useSTT() {
     recognition.interimResults = true;
     recognition.maxAlternatives = 1;
 
+    let mounted = true; // 언마운트 후 setState 방지
+
     recognition.onstart = () => {
+      if (!mounted) return;
       setIsListening(true);
       setError(null);
     };
 
     recognition.onend = () => {
+      if (!mounted) return;
       setIsListening(false);
     };
 
     recognition.onerror = (e) => {
+      if (!mounted) return;
       setError(`음성 인식 오류: ${e.error}`);
       setIsListening(false);
     };
 
     recognition.onresult = (e) => {
+      if (!mounted) return;
       let interim = "";
       let final = "";
 
@@ -76,6 +82,7 @@ export function useSTT() {
     recognitionRef.current = recognition;
 
     return () => {
+      mounted = false;
       recognition.abort();
     };
   }, []);

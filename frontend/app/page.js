@@ -3,256 +3,342 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useSTT } from "./hooks/useSTT";
 import { useTTS } from "./hooks/useTTS";
-import VoiceButton from "./components/VoiceButton";
 
 const WS_URL = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000")
   .replace(/^http/, "ws") + "/ws/navigate";
 
-const CAPTURE_INTERVAL_MS = 1000;
+const CAPTURE_INTERVAL_MS = 200;
 
-// 빠른 선택용 프리셋 (눌러도 되고, 음성으로 말해도 됨)
-const PRESET_TARGETS = [
-  { id: "화장실", icon: "🚻" },
-  { id: "강의실", icon: "📚" },
-  { id: "엘리베이터", icon: "🛗" },
-];
+const PRESET_TARGETS = ["화장실", "강의실", "엘리베이터"];
 
-// STT 결과에서 목적지 추출 — 탐색 동사 제거 후 핵심 명사만 남김
-const NAV_VERBS = ["찾아줘", "가고싶어", "가고 싶어", "어디야", "알려줘", "데려다줘", "가자", "찾아", "가줘", "알려", "보여줘", "어디에", "어디로"];
-function extractTarget(text) {
-  let t = text.trim();
-  for (const v of NAV_VERBS) t = t.replace(v, "").trim();
-  // 빈 문자열이면 null 반환
-  return t.length >= 1 ? t : null;
-}
+const DIRECTION = {
+  left: { label: "왼쪽", mark: "<" },
+  right: { label: "오른쪽", mark: ">" },
+  straight: { label: "직진", mark: "^" },
+  unknown: { label: "확인 중", mark: "-" },
+};
 
-// ── 방향 화살표 SVG ─────────────────────────────────────────────────────────
-function DirectionArrow({ direction }) {
-  const config = {
-    straight: {
-      rotate: "rotate-0",
-      color: "text-green-400",
-      glow: "drop-shadow(0 0 20px #4ade80)",
-      label: "직진",
-    },
-    left: {
-      rotate: "-rotate-90",
-      color: "text-blue-400",
-      glow: "drop-shadow(0 0 20px #60a5fa)",
-      label: "좌회전",
-    },
-    right: {
-      rotate: "rotate-90",
-      color: "text-blue-400",
-      glow: "drop-shadow(0 0 20px #60a5fa)",
-      label: "우회전",
-    },
-    unknown: {
-      rotate: "rotate-0",
-      color: "text-gray-500",
-      glow: "none",
-      label: "분석 중",
-    },
-  }[direction] ?? {
-    rotate: "rotate-0",
-    color: "text-gray-500",
-    glow: "none",
-    label: "—",
-  };
+const MESSAGE = {
+  warning: { label: "위험", color: "#ef4444", bg: "#2a0c0c" },
+  caution: { label: "주의", color: "#f59e0b", bg: "#261a07" },
+  guidance: { label: "안내", color: "#22c55e", bg: "#071f12" },
+  searching: { label: "탐색", color: "#3b82f6", bg: "#071629" },
+  monitoring: { label: "감시", color: "#94a3b8", bg: "#0b1220" },
+  arrived: { label: "도착", color: "#a855f7", bg: "#160d24" },
+  stopped: { label: "중지", color: "#94a3b8", bg: "#0b1220" },
+  ready: { label: "준비", color: "#94a3b8", bg: "#0b1220" },
+};
 
-  if (direction === "unknown" || !direction) {
-    return (
-      <div className="flex flex-col items-center gap-2">
-        <div className="w-20 h-20 rounded-full border-4 border-gray-700 flex items-center justify-center">
-          <span className="text-gray-600 text-3xl font-bold">?</span>
-        </div>
-        <span className="text-gray-500 text-sm font-medium">{config.label}</span>
-      </div>
-    );
-  }
+const styles = {
+  page: {
+    minHeight: "100vh",
+    background: "#080b10",
+    color: "#f8fafc",
+    fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+    display: "flex",
+    justifyContent: "center",
+  },
+  shell: {
+    width: "100%",
+    maxWidth: 460,
+    minHeight: "100vh",
+    display: "flex",
+    flexDirection: "column",
+    padding: "18px 16px 20px",
+    gap: 14,
+    boxSizing: "border-box",
+  },
+  header: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+  },
+  title: {
+    margin: 0,
+    fontSize: 21,
+    lineHeight: 1.2,
+    fontWeight: 800,
+    letterSpacing: 0,
+  },
+  subtitle: {
+    margin: "4px 0 0",
+    fontSize: 13,
+    lineHeight: 1.35,
+    color: "#94a3b8",
+  },
+  pill: {
+    minWidth: 72,
+    height: 34,
+    padding: "0 11px",
+    borderRadius: 999,
+    border: "1px solid #243244",
+    background: "#0d1420",
+    color: "#cbd5e1",
+    fontSize: 12,
+    fontWeight: 700,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 7,
+    whiteSpace: "nowrap",
+  },
+  dot: {
+    width: 8,
+    height: 8,
+    borderRadius: "50%",
+    background: "#475569",
+    flex: "0 0 auto",
+  },
+  targetPanel: {
+    display: "grid",
+    gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+    gap: 8,
+  },
+  targetButton: {
+    height: 48,
+    borderRadius: 8,
+    border: "1px solid #243244",
+    background: "#101722",
+    color: "#cbd5e1",
+    fontSize: 14,
+    fontWeight: 750,
+    cursor: "pointer",
+  },
+  inputRow: {
+    display: "grid",
+    gridTemplateColumns: "1fr 50px",
+    gap: 8,
+  },
+  input: {
+    width: "100%",
+    height: 46,
+    padding: "0 13px",
+    borderRadius: 8,
+    border: "1px solid #243244",
+    background: "#0d1420",
+    color: "#f8fafc",
+    fontSize: 15,
+    outline: "none",
+    boxSizing: "border-box",
+  },
+  iconButton: {
+    width: 50,
+    height: 46,
+    borderRadius: 8,
+    border: "1px solid #243244",
+    background: "#101722",
+    color: "#e2e8f0",
+    fontSize: 19,
+    fontWeight: 800,
+    cursor: "pointer",
+  },
+  cameraBox: {
+    width: "100%",
+    aspectRatio: "4 / 3",
+    borderRadius: 8,
+    overflow: "hidden",
+    background: "#111827",
+    border: "1px solid #243244",
+    position: "relative",
+  },
+  video: {
+    width: "100%",
+    height: "100%",
+    objectFit: "cover",
+    display: "block",
+    background: "#111827",
+  },
+  cameraEmpty: {
+    position: "absolute",
+    inset: 0,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    color: "#64748b",
+    fontSize: 15,
+    fontWeight: 650,
+  },
+  overlayTop: {
+    position: "absolute",
+    top: 10,
+    left: 10,
+    right: 10,
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    pointerEvents: "none",
+  },
+  overlayBadge: {
+    height: 30,
+    padding: "0 10px",
+    borderRadius: 999,
+    background: "rgba(8, 11, 16, 0.76)",
+    border: "1px solid rgba(226, 232, 240, 0.14)",
+    display: "flex",
+    alignItems: "center",
+    gap: 7,
+    fontSize: 12,
+    fontWeight: 800,
+    color: "#e2e8f0",
+  },
+  directionOverlay: {
+    position: "absolute",
+    left: "50%",
+    bottom: 12,
+    transform: "translateX(-50%)",
+    minWidth: 150,
+    height: 48,
+    borderRadius: 999,
+    background: "rgba(8, 11, 16, 0.84)",
+    border: "1px solid rgba(34, 197, 94, 0.45)",
+    color: "#bbf7d0",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 10,
+    fontSize: 15,
+    fontWeight: 850,
+    pointerEvents: "none",
+  },
+  directionMark: {
+    width: 28,
+    height: 28,
+    borderRadius: 999,
+    background: "#12351f",
+    color: "#86efac",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    fontSize: 18,
+    lineHeight: 1,
+  },
+  status: {
+    minHeight: 88,
+    borderRadius: 8,
+    border: "1px solid #243244",
+    background: "#0d1420",
+    padding: 14,
+    boxSizing: "border-box",
+    display: "flex",
+    flexDirection: "column",
+    justifyContent: "center",
+    gap: 8,
+  },
+  statusHead: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
+  },
+  statusLabel: {
+    fontSize: 12,
+    fontWeight: 850,
+    letterSpacing: 0,
+  },
+  statusTarget: {
+    fontSize: 12,
+    color: "#94a3b8",
+    whiteSpace: "nowrap",
+  },
+  statusText: {
+    margin: 0,
+    color: "#e2e8f0",
+    fontSize: 16,
+    lineHeight: 1.45,
+    fontWeight: 720,
+  },
+  actions: {
+    display: "grid",
+    gridTemplateColumns: "1fr 1fr",
+    gap: 10,
+  },
+  primaryAction: {
+    height: 58,
+    borderRadius: 8,
+    border: "1px solid #2563eb",
+    background: "#1d4ed8",
+    color: "#fff",
+    fontSize: 16,
+    fontWeight: 850,
+    cursor: "pointer",
+  },
+  secondaryAction: {
+    height: 58,
+    borderRadius: 8,
+    border: "1px solid #334155",
+    background: "#111827",
+    color: "#e2e8f0",
+    fontSize: 16,
+    fontWeight: 850,
+    cursor: "pointer",
+  },
+  startAction: {
+    height: 58,
+    borderRadius: 8,
+    border: "1px solid #16a34a",
+    background: "#15803d",
+    color: "#fff",
+    fontSize: 16,
+    fontWeight: 850,
+    cursor: "pointer",
+  },
+  error: {
+    borderRadius: 8,
+    border: "1px solid #7f1d1d",
+    background: "#2a0c0c",
+    color: "#fecaca",
+    padding: "11px 12px",
+    fontSize: 13,
+    lineHeight: 1.35,
+  },
+};
 
-  return (
-    <div className="flex flex-col items-center gap-2">
-      <div
-        className={`${config.rotate} transition-transform duration-500 ${config.color}`}
-        style={{ filter: config.glow }}
-      >
-        <svg
-          xmlns="http://www.w3.org/2000/svg"
-          viewBox="0 0 80 80"
-          fill="currentColor"
-          className="w-20 h-20 animate-bounce-subtle"
-          aria-hidden="true"
-        >
-          <path d="M40 6 L68 62 L40 50 L12 62 Z" />
-        </svg>
-      </div>
-      <span className={`text-sm font-semibold ${config.color}`}>{config.label}</span>
-    </div>
-  );
-}
-
-// ── 상태 카드 ────────────────────────────────────────────────────────────────
-function StatusCard({ decision }) {
-  if (!decision) return null;
-
-  const typeConfig = {
-    warning: {
-      bg: "bg-red-950/80 border-red-500/60",
-      text: "text-red-300",
-      icon: "⚠️",
-      badge: "bg-red-500",
-      badgeText: "위험",
-    },
-    caution: {
-      bg: "bg-amber-950/80 border-amber-500/60",
-      text: "text-amber-300",
-      icon: "⚡",
-      badge: "bg-amber-500",
-      badgeText: "주의",
-    },
-    guidance: {
-      bg: "bg-green-950/80 border-green-500/40",
-      text: "text-green-300",
-      icon: "🧭",
-      badge: "bg-green-600",
-      badgeText: "안내",
-    },
-    arrived: {
-      bg: "bg-blue-950/80 border-blue-400/60",
-      text: "text-blue-300",
-      icon: "✅",
-      badge: "bg-blue-500",
-      badgeText: "도착",
-    },
-    unknown: {
-      bg: "bg-gray-900/80 border-gray-600/40",
-      text: "text-gray-400",
-      icon: "🔍",
-      badge: "bg-gray-600",
-      badgeText: "탐색",
-    },
-  }[decision.message_type] ?? {
-    bg: "bg-gray-900/80 border-gray-600/40",
-    text: "text-gray-400",
-    icon: "💬",
-    badge: "bg-gray-600",
-    badgeText: "정보",
-  };
-
-  return (
-    <div
-      className={`w-full max-w-lg rounded-2xl border px-5 py-4 ${typeConfig.bg} animate-slide-up`}
-      role="status"
-      aria-live="assertive"
-    >
-      <div className="flex items-start gap-3">
-        <span className="text-2xl mt-0.5 shrink-0" aria-hidden="true">
-          {typeConfig.icon}
-        </span>
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 mb-1">
-            <span
-              className={`text-xs font-bold px-2 py-0.5 rounded-full text-white ${typeConfig.badge}`}
-            >
-              {typeConfig.badgeText}
-            </span>
-            {decision.debug?.vlm_goal_distance && decision.debug.vlm_goal_distance !== "unknown" && (
-              <span className="text-xs text-gray-400">{decision.debug.vlm_goal_distance}</span>
-            )}
-          </div>
-          <p className={`text-lg font-semibold leading-snug ${typeConfig.text}`}>
-            {decision.tts_text}
-          </p>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ── 신뢰도 바 ────────────────────────────────────────────────────────────────
-function ConfidenceBar({ confidence }) {
-  if (confidence == null) return null;
-  const pct = Math.round(confidence * 100);
-  const color =
-    pct >= 75 ? "bg-green-500" : pct >= 60 ? "bg-amber-500" : "bg-gray-600";
-  return (
-    <div className="w-full max-w-lg">
-      <div className="flex justify-between text-xs text-gray-500 mb-1">
-        <span>신뢰도</span>
-        <span>{pct}%</span>
-      </div>
-      <div className="h-1.5 bg-gray-800 rounded-full overflow-hidden">
-        <div
-          className={`h-full rounded-full transition-all duration-500 ${color}`}
-          style={{ width: `${pct}%` }}
-        />
-      </div>
-    </div>
-  );
-}
-
-// ── 경과 시간 훅 ─────────────────────────────────────────────────────────────
-function useElapsedTime(isRunning) {
-  const [elapsed, setElapsed] = useState(0);
-  const startRef = useRef(null);
-
-  useEffect(() => {
-    if (isRunning) {
-      startRef.current = Date.now() - elapsed * 1000;
-      const id = setInterval(() => {
-        setElapsed(Math.floor((Date.now() - startRef.current) / 1000));
-      }, 1000);
-      return () => clearInterval(id);
-    } else {
-      setElapsed(0);
-    }
-  }, [isRunning]); // eslint-disable-line
-
-  const mm = String(Math.floor(elapsed / 60)).padStart(2, "0");
-  const ss = String(elapsed % 60).padStart(2, "0");
-  return `${mm}:${ss}`;
-}
-
-// ── 메인 페이지 ──────────────────────────────────────────────────────────────
 export default function HomePage() {
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
   const wsRef = useRef(null);
   const intervalRef = useRef(null);
+  const frameReadyRef = useRef(false);
+  const rvcHandleRef = useRef(null);
+  const lastSpokenRef = useRef({ text: "", type: "", at: 0 });
 
   const [target, setTarget] = useState("");
-  const [status, setStatus] = useState("목적지를 선택하고 시작하세요");
-  const [isRunning, setIsRunning] = useState(false);
-  const [lastDecision, setLastDecision] = useState(null);
-  const [cameraError, setCameraError] = useState(null);
   const [navState, setNavState] = useState("idle");
+  const [decision, setDecision] = useState(null);
   const [wsConnected, setWsConnected] = useState(false);
   const [isQuerying, setIsQuerying] = useState(false);
+  const [cameraError, setCameraError] = useState(null);
 
-  const elapsedTime = useElapsedTime(isRunning);
+  const { transcript, isListening, start: startSTT, stop: stopSTT, reset: resetSTT } = useSTT();
+  const { speak, stop: stopTTS, clearPending, isSpeaking } = useTTS();
 
-  const { transcript, isListening, start: startSTT, stop: stopSTT, reset: resetSTT, error: sttError } =
-    useSTT();
-  const { speak, isSpeaking } = useTTS();
+  const isRunning = navState === "navigating";
+  const direction = DIRECTION[decision?.direction] || DIRECTION.unknown;
+  const messageType = decision?.message_type || (isRunning ? "monitoring" : "ready");
+  const message = MESSAGE[messageType] || MESSAGE.monitoring;
 
-  // STT 결과로 목적지 변경 (자유 입력)
   useEffect(() => {
-    if (!transcript) return;
-    const extracted = extractTarget(transcript);
-    if (extracted) {
-      setTarget(extracted);
-      speak(`목적지를 ${extracted}(으)로 설정했습니다`);
+    if (!transcript || navState !== "idle") return;
+    const cleaned = transcript
+      .replace(/찾아줘|가고\s?싶어|어디야|알려줘|데려다줘|가자|가줘|보여줘|어디에|어디로/g, "")
+      .trim();
+    if (cleaned.length >= 1) {
+      setTarget(cleaned);
+      speak(`목적지를 ${cleaned}(으)로 설정했습니다`);
       resetSTT();
     }
-  }, [transcript, speak, resetSTT]);
+  }, [transcript, navState, speak, resetSTT]);
 
-  // 카메라 시작
   const startCamera = useCallback(async () => {
     setCameraError(null);
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: "environment" }, width: { ideal: 640 }, height: { ideal: 480 } },
+        video: {
+          facingMode: { ideal: "environment" },
+          width: { ideal: 640 },
+          height: { ideal: 480 },
+        },
       });
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
@@ -263,512 +349,370 @@ export default function HomePage() {
     }
   }, []);
 
-  // 카메라 종료
   const stopCamera = useCallback(() => {
-    if (videoRef.current?.srcObject) {
-      videoRef.current.srcObject.getTracks().forEach((t) => t.stop());
-      videoRef.current.srcObject = null;
+    videoRef.current?.srcObject?.getTracks().forEach((track) => track.stop());
+    if (videoRef.current) videoRef.current.srcObject = null;
+  }, []);
+
+  const startFrameCache = useCallback(() => {
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    if (!video || !canvas) return;
+
+    const capture = () => {
+      if (video.readyState >= 2) {
+        canvas.width = video.videoWidth || 640;
+        canvas.height = video.videoHeight || 480;
+        canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
+        frameReadyRef.current = true;
+      }
+    };
+
+    if (video.requestVideoFrameCallback) {
+      const loop = () => {
+        capture();
+        rvcHandleRef.current = video.requestVideoFrameCallback(loop);
+      };
+      rvcHandleRef.current = video.requestVideoFrameCallback(loop);
+    } else {
+      const loop = () => {
+        capture();
+        rvcHandleRef.current = requestAnimationFrame(loop);
+      };
+      rvcHandleRef.current = requestAnimationFrame(loop);
     }
   }, []);
 
-  // 프레임 캡처 → WebSocket 전송
-  const captureAndSend = useCallback(() => {
+  const stopFrameCache = useCallback(() => {
     const video = videoRef.current;
-    const canvas = canvasRef.current;
-    const ws = wsRef.current;
-    if (!video || !canvas || !ws || ws.readyState !== WebSocket.OPEN) return;
-    if (video.readyState < 2) return;
+    if (rvcHandleRef.current != null) {
+      video?.requestVideoFrameCallback
+        ? video.cancelVideoFrameCallback(rvcHandleRef.current)
+        : cancelAnimationFrame(rvcHandleRef.current);
+      rvcHandleRef.current = null;
+    }
+    frameReadyRef.current = false;
+  }, []);
 
-    canvas.width = video.videoWidth || 640;
-    canvas.height = video.videoHeight || 480;
-    canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
+  const handleMessage = useCallback((data) => {
+    const { message_type, tts_text, query_response } = data;
+    setDecision(data);
 
-    const b64 = canvas.toDataURL("image/jpeg", 0.8);
-    ws.send(JSON.stringify({ action: "frame", frame: b64, target }));
-  }, [target]);
+    if (message_type === "arrived") {
+      stopTTS();
+      speak(tts_text, true);
+      setNavState("arrived");
+      clearInterval(intervalRef.current);
+      stopFrameCache();
+      stopCamera();
+      if (wsRef.current?.readyState === WebSocket.OPEN) wsRef.current.close();
+      wsRef.current = null;
+      setWsConnected(false);
+      setTimeout(() => {
+        setNavState("idle");
+        setDecision(null);
+        setTarget("");
+      }, 6000);
+      return;
+    }
 
-  // VLM 방향 조회 (사용자 요청 시)
-  const queryDirection = useCallback(() => {
-    const video = videoRef.current;
-    const canvas = canvasRef.current;
-    const ws = wsRef.current;
-    if (!video || !canvas || !ws || ws.readyState !== WebSocket.OPEN) return;
-    if (video.readyState < 2) return;
-    if (isQuerying) return; // 중복 요청 방지
+    if (message_type === "stopped") return;
 
-    canvas.width = video.videoWidth || 640;
-    canvas.height = video.videoHeight || 480;
-    canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
+    if (query_response) {
+      setIsQuerying(false);
+      speak(tts_text, true);
+      lastSpokenRef.current = { text: tts_text, type: message_type, at: Date.now() };
+      return;
+    }
 
-    const b64 = canvas.toDataURL("image/jpeg", 0.8);
-    ws.send(JSON.stringify({ action: "query", frame: b64, target }));
-    setIsQuerying(true);
-    speak("분석 중입니다");
-  }, [target, speak, isQuerying]);
-
-  // ── TTS 쿨다운 관리 ─────────────────────────────────────────────────────────
-  const lastSpokenTypeRef = useRef("");
-  const lastSpokenTextRef = useRef("");
-  const lastSpokenAtRef   = useRef(0);
-
-  /**
-   * speakIfNeeded
-   * @param {string}  tts_text     발화할 텍스트
-   * @param {string}  message_type "warning" | "caution" | "guidance" | "unknown" | "arrived"
-   * @param {boolean} cached       서버가 쿨다운 중 재전송한 캐시 메시지 여부
-   *
-   * 쿨다운 기준
-   *   경고·주의·도착   : 항상 즉시 발화
-   *   guidance (실시간) : 텍스트가 바뀌거나 8초 초과 시 발화
-   *   guidance (캐시)   : 텍스트가 바뀌거나 1500ms 초과 시 발화
-   *                       → 서버가 INTERVAL/2(≈2s) 주기로 보내므로 실제론 ~2s 간격
-   *   unknown           : 발화하지 않음
-   */
-  const speakIfNeeded = useCallback((tts_text, message_type, cached = false) => {
     const now = Date.now();
-    const elapsed = now - lastSpokenAtRef.current;
+    const prev = lastSpokenRef.current;
+    const elapsed = now - prev.at;
 
-    // 안전 경고·주의·도착은 무조건 즉시 발화
-    if (message_type === "warning" || message_type === "caution" || message_type === "arrived") {
-      speak(tts_text);
-      lastSpokenAtRef.current = now;
-      lastSpokenTextRef.current = tts_text;
-      lastSpokenTypeRef.current = message_type;
+    if (message_type === "warning") {
+      speak(tts_text, true);
+      lastSpokenRef.current = { text: tts_text, type: message_type, at: now };
       return;
     }
 
-    // guidance: 방향이 바뀌거나 쿨다운 초과 시 발화
-    //   실시간 응답 → 8초 / 캐시 재전송 → 1500ms (서버 resend 주기와 맞춤)
-    if (message_type === "guidance") {
-      const threshold = cached ? 1500 : 8000;
-      if (tts_text !== lastSpokenTextRef.current || elapsed > threshold) {
-        speak(tts_text);
-        lastSpokenAtRef.current = now;
-        lastSpokenTextRef.current = tts_text;
-        lastSpokenTypeRef.current = message_type;
+    if (message_type === "caution") {
+      if (tts_text !== prev.text || elapsed > 4000) {
+        speak(tts_text, false);
+        lastSpokenRef.current = { text: tts_text, type: message_type, at: now };
       }
       return;
     }
 
-    // unknown: 발화하지 않음 (캐시 재전송 시에도 침묵 유지)
-  }, [speak]);
+    if (message_type === "monitoring") {
+      speak(tts_text, false);
+      lastSpokenRef.current = { text: tts_text, type: message_type, at: now };
+      return;
+    }
 
-  // WebSocket 메시지 처리
-  const handleWsMessage = useCallback(
-    (data) => {
-      // 방향 조회 응답이면 isQuerying 해제
-      if (data.query_response) setIsQuerying(false);
-
-      setLastDecision(data);
-      setStatus(data.tts_text);
-
-      // 방향 조회 응답은 항상 즉시 발화 (쿨다운 무시)
-      if (data.query_response) {
-        speak(data.tts_text);
-        lastSpokenAtRef.current = Date.now();
-        lastSpokenTextRef.current = data.tts_text;
-        lastSpokenTypeRef.current = data.message_type;
-      } else {
-        // cached: true → 서버가 쿨다운 중 재전송한 캐시 메시지 (더 짧은 threshold 적용)
-        speakIfNeeded(data.tts_text, data.message_type, data.cached === true);
+    if (message_type === "guidance" || message_type === "searching") {
+      if (tts_text !== prev.text || elapsed > 8000) {
+        speak(tts_text, false);
+        lastSpokenRef.current = { text: tts_text, type: message_type, at: now };
       }
+    }
+  }, [speak, stopTTS, stopFrameCache, stopCamera]);
 
-      if (data.message_type === "arrived") {
-        clearInterval(intervalRef.current);
-        stopCamera();
-        setIsRunning(false);
-        setNavState("arrived");
-        setWsConnected(false);
-      }
-    },
-    [speak, speakIfNeeded, stopCamera]
-  );
-
-  // 안내 시작
   const startNavigation = useCallback(async () => {
     await startCamera();
-
     const ws = new WebSocket(WS_URL);
     wsRef.current = ws;
 
     ws.onopen = () => {
       ws.send(JSON.stringify({ action: "start", target }));
-      setIsRunning(true);
       setNavState("navigating");
       setWsConnected(true);
-      setLastDecision(null);
-      speak("분석 후 안내해드리겠습니다");
-      intervalRef.current = setInterval(captureAndSend, CAPTURE_INTERVAL_MS);
+      setDecision(null);
+      lastSpokenRef.current = { text: "", type: "", at: 0 };
+      startFrameCache();
+      intervalRef.current = setInterval(() => {
+        if (ws.readyState === WebSocket.OPEN && frameReadyRef.current) {
+          canvasRef.current?.toBlob((blob) => {
+            if (blob && ws.readyState === WebSocket.OPEN) ws.send(blob);
+          }, "image/jpeg", 0.8);
+        }
+      }, CAPTURE_INTERVAL_MS);
     };
 
     ws.onmessage = (e) => {
       try {
-        handleWsMessage(JSON.parse(e.data));
+        handleMessage(JSON.parse(e.data));
       } catch {}
     };
 
     ws.onerror = () => {
-      setStatus("서버 연결 오류");
-      setIsRunning(false);
+      setCameraError("서버 연결 오류");
       setNavState("idle");
       setWsConnected(false);
-      setIsQuerying(false);
     };
 
     ws.onclose = () => {
       clearInterval(intervalRef.current);
-      setIsRunning(false);
+      stopFrameCache();
       setWsConnected(false);
-      setIsQuerying(false);
     };
-  }, [startCamera, captureAndSend, handleWsMessage, target]);
+  }, [target, startCamera, startFrameCache, stopFrameCache, handleMessage]);
 
-  // 안내 중지
   const stopNavigation = useCallback(() => {
     const ws = wsRef.current;
-    if (ws && ws.readyState === WebSocket.OPEN) {
+    if (ws?.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ action: "stop" }));
       ws.close();
     }
     clearInterval(intervalRef.current);
+    stopFrameCache();
     stopCamera();
-    setIsRunning(false);
+    stopTTS();
+    clearPending();
     setNavState("idle");
     setWsConnected(false);
-    setLastDecision(null);
-    setStatus("안내를 중지했습니다");
+    setDecision(null);
+    setIsQuerying(false);
     speak("안내를 중지했습니다");
-  }, [stopCamera, speak]);
+  }, [stopCamera, stopFrameCache, stopTTS, clearPending, speak]);
 
-  // 언마운트 정리
-  useEffect(() => {
-    return () => {
-      clearInterval(intervalRef.current);
-      wsRef.current?.close();
-      stopCamera();
-    };
+  const queryDirection = useCallback(() => {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN || !frameReadyRef.current || isQuerying) return;
+    const b64 = canvasRef.current?.toDataURL("image/jpeg", 0.8);
+    if (!b64) return;
+    ws.send(JSON.stringify({ action: "query", frame: b64, target }));
+    setIsQuerying(true);
+    speak("분석 중입니다", false);
+  }, [target, speak, isQuerying]);
+
+  useEffect(() => () => {
+    clearInterval(intervalRef.current);
+    wsRef.current?.close();
+    stopCamera();
   }, [stopCamera]);
 
-  const currentDirection = lastDecision?.debug?.confirmed_direction ?? null;
-  const presetInfo = PRESET_TARGETS.find((t) => t.id === target);
+  const statusText = isRunning
+    ? decision?.tts_text || "장애물 감시 중입니다."
+    : target
+      ? `${target} 안내를 시작할 수 있습니다.`
+      : "목적지를 선택하세요.";
 
   return (
-    <main className="min-h-screen bg-gray-950 flex flex-col items-center pb-8 select-none">
-
-      {/* ── 헤더 ── */}
-      <header className="w-full max-w-lg px-4 pt-5 pb-3 flex items-center justify-between">
-        <div>
-          <h1 className="text-xl font-bold tracking-tight text-white">실내 길 안내</h1>
-          <p className="text-xs text-gray-500 mt-0.5">Indoor Navigation AI</p>
-        </div>
-        {/* 연결 상태 */}
-        <div className="flex items-center gap-2">
-          {isSpeaking && (
-            <span className="text-xs text-purple-400 flex items-center gap-1">
-              <span className="w-1.5 h-1.5 rounded-full bg-purple-400 animate-pulse-fast inline-block" />
-              음성 출력
-            </span>
-          )}
-          <div
-            className={`flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full border ${
-              wsConnected
-                ? "border-green-700 text-green-400 bg-green-950/50"
-                : "border-gray-700 text-gray-500 bg-gray-900/50"
-            }`}
-          >
-            <span
-              className={`w-1.5 h-1.5 rounded-full ${
-                wsConnected ? "bg-green-400 animate-ping-slow" : "bg-gray-600"
-              }`}
-            />
+    <main style={styles.page}>
+      <div style={styles.shell}>
+        <header style={styles.header}>
+          <div>
+            <h1 style={styles.title}>실내 보조 안내</h1>
+            <p style={styles.subtitle}>목적지: {target || "미선택"}</p>
+          </div>
+          <div style={{
+            ...styles.pill,
+            borderColor: wsConnected ? "#14532d" : "#243244",
+            color: wsConnected ? "#86efac" : "#94a3b8",
+          }}>
+            <span style={{ ...styles.dot, background: wsConnected ? "#22c55e" : "#475569" }} />
             {wsConnected ? "연결됨" : "대기"}
+            {isSpeaking ? " · 음성" : ""}
           </div>
-        </div>
-      </header>
+        </header>
 
-      <div className="w-full max-w-lg px-4 flex flex-col gap-4">
-
-        {/* ── 목적지 설정 ── */}
-        <section aria-label="목적지 설정">
-          <p className="text-xs text-gray-500 mb-2 uppercase tracking-wide">목적지</p>
-
-          {/* 현재 목적지 표시 + 텍스트 입력 */}
-          <div className={`flex items-center gap-3 rounded-2xl border-2 px-4 py-3 transition-colors ${
-            target ? "border-blue-500/60 bg-blue-950/20" : "border-gray-700/60 bg-gray-900/40"
-          }`}>
-            <span className="text-2xl" aria-hidden="true">
-              {presetInfo?.icon ?? "📍"}
-            </span>
-            <input
-              type="text"
-              value={target}
-              onChange={(e) => !isRunning && setTarget(e.target.value)}
-              disabled={isRunning}
-              placeholder='목적지를 말하거나 입력하세요 (예: "301호 찾아줘")'
-              className="flex-1 bg-transparent text-white placeholder-gray-600 text-sm outline-none disabled:opacity-50"
-              aria-label="목적지 직접 입력"
-            />
-            {target && !isRunning && (
-              <button
-                onClick={() => setTarget("")}
-                className="text-gray-600 hover:text-gray-400 text-lg leading-none"
-                aria-label="목적지 초기화"
-              >
-                ✕
-              </button>
-            )}
-          </div>
-
-          {/* 프리셋 빠른 선택 */}
-          <div className="flex gap-2 mt-2">
-            {PRESET_TARGETS.map((t) => (
-              <button
-                key={t.id}
-                onClick={() => !isRunning && setTarget(t.id)}
-                disabled={isRunning}
-                className={[
-                  "flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-xs font-medium transition-all",
-                  target === t.id
-                    ? "border-blue-500 bg-blue-950/60 text-blue-300"
-                    : "border-gray-700/60 bg-gray-900/40 text-gray-500 hover:border-gray-500 hover:text-gray-300",
-                  isRunning ? "opacity-30 cursor-not-allowed" : "cursor-pointer",
-                ].join(" ")}
-              >
-                <span>{t.icon}</span>
-                <span>{t.id}</span>
-              </button>
-            ))}
-          </div>
-        </section>
-
-        {/* ── 카메라 뷰 ── */}
-        <section aria-label="카메라 화면" className="relative">
-          <div className="relative w-full aspect-video bg-gray-900 rounded-2xl overflow-hidden border border-gray-800">
-            <video
-              ref={videoRef}
-              className="w-full h-full object-cover"
-              playsInline
-              muted
-              aria-label="카메라 화면"
-            />
-            <canvas ref={canvasRef} className="hidden" />
-
-            {/* 꺼짐 상태 */}
-            {!isRunning && (
-              <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-gray-600">
-                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-10 h-10 opacity-40">
-                  <path d="M2 6.75A2.75 2.75 0 014.75 4h9.5A2.75 2.75 0 0117 6.75v.5l3.726-2.483A.75.75 0 0122 5.5v13a.75.75 0 01-1.274.533L17 16.75v.5A2.75 2.75 0 0114.25 20h-9.5A2.75 2.75 0 012 17.25V6.75z" />
-                </svg>
-                <span className="text-sm opacity-60">카메라 꺼짐</span>
-              </div>
-            )}
-
-            {/* 안내 중 오버레이 */}
-            {isRunning && (
-              <>
-                {/* 코너 가이드 */}
-                <div className="absolute top-3 left-3 w-6 h-6 border-t-2 border-l-2 border-white/30 rounded-tl-sm" />
-                <div className="absolute top-3 right-3 w-6 h-6 border-t-2 border-r-2 border-white/30 rounded-tr-sm" />
-                <div className="absolute bottom-3 left-3 w-6 h-6 border-b-2 border-l-2 border-white/30 rounded-bl-sm" />
-                <div className="absolute bottom-3 right-3 w-6 h-6 border-b-2 border-r-2 border-white/30 rounded-br-sm" />
-
-                {/* 상단 정보 바 */}
-                <div className="absolute top-0 left-0 right-0 flex items-center justify-between px-3 pt-2 pb-1.5 bg-gradient-to-b from-black/60 to-transparent">
-                  <span className="flex items-center gap-1.5 text-xs text-red-400 font-semibold">
-                    <span className="w-1.5 h-1.5 rounded-full bg-red-400 animate-ping-slow" />
-                    REC
-                  </span>
-                  <span className="text-xs text-white/70 font-mono">{elapsedTime}</span>
-                  <span className="text-xs text-white/70">{presetInfo?.icon ?? "📍"} {target}</span>
-                </div>
-
-                {/* 경고 시 카메라 테두리 강조 */}
-                {lastDecision?.message_type === "warning" && (
-                  <div className="absolute inset-0 border-4 border-red-500/70 rounded-2xl animate-pulse pointer-events-none" />
-                )}
-              </>
-            )}
-          </div>
-        </section>
-
-        {/* ── 방향 패널 ── */}
-        {isRunning && (
-          <section
-            aria-label="방향 안내"
-            className="glass-card rounded-2xl px-6 py-5 flex items-center justify-between animate-fade-in"
-          >
-            <div className="flex flex-col gap-1">
-              <span className="text-xs text-gray-500 uppercase tracking-wide">방향</span>
-              <span className="text-2xl font-bold text-white">
-                {currentDirection === "straight" && "직진 ↑"}
-                {currentDirection === "left" && "← 좌회전"}
-                {currentDirection === "right" && "우회전 →"}
-                {(currentDirection === "unknown" || !currentDirection) && "—"}
-              </span>
-              {lastDecision?.debug?.vlm_goal_distance && lastDecision.debug.vlm_goal_distance !== "unknown" && (
-                <span className="text-sm text-gray-400">{lastDecision.debug.vlm_goal_distance}</span>
-              )}
-            </div>
-            <DirectionArrow direction={currentDirection} />
-          </section>
-        )}
-
-        {/* ── 도착 완료 카드 ── */}
-        {navState === "arrived" && (
-          <div className="glass-card rounded-2xl px-6 py-6 text-center border border-blue-500/30 animate-slide-up">
-            <div className="text-4xl mb-2">🎉</div>
-            <p className="text-blue-300 text-xl font-bold">
-              {presetInfo?.icon ?? "📍"} {target}에 도착했습니다!
-            </p>
-            <p className="text-gray-500 text-sm mt-1">목적지에 도달했습니다</p>
-            <button
-              onClick={() => { setNavState("idle"); setLastDecision(null); setStatus("목적지를 선택하고 시작하세요"); }}
-              className="mt-4 px-6 py-2 bg-blue-600 hover:bg-blue-500 rounded-full text-sm font-semibold transition-colors"
-            >
-              처음으로
-            </button>
-          </div>
-        )}
-
-        {/* ── 상태 카드 ── */}
-        {lastDecision && navState !== "arrived" && <StatusCard decision={lastDecision} />}
-
-        {/* ── idle 상태 안내 텍스트 ── */}
         {!isRunning && navState !== "arrived" && (
-          <p className="text-center text-gray-500 text-sm px-4">
-            {!target.trim()
-              ? '🎙 음성 버튼을 눌러 목적지를 말해보세요'
-              : status}
-          </p>
+          <>
+            <div style={styles.targetPanel}>
+              {PRESET_TARGETS.map((item) => {
+                const selected = target === item;
+                return (
+                  <button
+                    key={item}
+                    type="button"
+                    onClick={() => setTarget(item)}
+                    style={{
+                      ...styles.targetButton,
+                      borderColor: selected ? "#2563eb" : "#243244",
+                      background: selected ? "#10254a" : "#101722",
+                      color: selected ? "#bfdbfe" : "#cbd5e1",
+                    }}
+                  >
+                    {item}
+                  </button>
+                );
+              })}
+            </div>
+
+            <div style={styles.inputRow}>
+              <input
+                type="text"
+                value={target}
+                onChange={(e) => setTarget(e.target.value)}
+                placeholder="직접 입력"
+                style={styles.input}
+              />
+              <button
+                type="button"
+                onPointerDown={startSTT}
+                onPointerUp={stopSTT}
+                style={{
+                  ...styles.iconButton,
+                  borderColor: isListening ? "#2563eb" : "#243244",
+                  background: isListening ? "#10254a" : "#101722",
+                }}
+                aria-label="음성 입력"
+              >
+                {isListening ? "..." : "음성"}
+              </button>
+            </div>
+          </>
         )}
 
-        {/* ── 신뢰도 바 ── */}
-        {isRunning && lastDecision?.debug?.vlm_confidence != null && (
-          <ConfidenceBar confidence={lastDecision.debug.vlm_confidence} />
-        )}
+        <section style={styles.cameraBox}>
+          <video ref={videoRef} style={styles.video} playsInline muted />
+          <canvas ref={canvasRef} style={{ display: "none" }} />
 
-        {/* ── 컨트롤 ── */}
-        <div className="flex items-center justify-center gap-6 mt-2">
-          {/* 음성 버튼 — 대기 중: 목적지 STT / 안내 중: 방향 조회 */}
-          <div className="flex flex-col items-center gap-1.5">
-            <VoiceButton
-              isListening={isRunning ? isQuerying : isListening}
-              onStart={isRunning ? queryDirection : startSTT}
-              onStop={isRunning ? undefined : stopSTT}
-              disabled={false}
-            />
-            <span className="text-xs text-gray-600">
-              {isRunning ? (isQuerying ? "분석 중..." : "방향 조회") : "음성 입력"}
+          {!isRunning && navState !== "arrived" && (
+            <div style={styles.cameraEmpty}>카메라 대기</div>
+          )}
+
+          {isRunning && (
+            <>
+              <div style={styles.overlayTop}>
+                <div style={styles.overlayBadge}>
+                  <span style={{ ...styles.dot, background: "#ef4444" }} />
+                  감시 중
+                </div>
+                <div style={styles.overlayBadge}>{target}</div>
+              </div>
+
+              {decision?.message_type === "warning" && (
+                <div style={{
+                  position: "absolute",
+                  inset: 0,
+                  border: "4px solid #ef4444",
+                  borderRadius: 8,
+                  pointerEvents: "none",
+                }} />
+              )}
+
+              {isQuerying && (
+                <div style={styles.directionOverlay}>
+                  <span style={styles.directionMark}>...</span>
+                  분석 중
+                </div>
+              )}
+
+              {!isQuerying && decision?.query_response && decision?.direction !== "unknown" && (
+                <div style={styles.directionOverlay}>
+                  <span style={styles.directionMark}>{direction.mark}</span>
+                  {direction.label}
+                </div>
+              )}
+            </>
+          )}
+
+          {navState === "arrived" && (
+            <div style={{
+              position: "absolute",
+              inset: 0,
+              background: "rgba(8, 11, 16, 0.86)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              color: "#e9d5ff",
+              fontSize: 20,
+              fontWeight: 850,
+            }}>
+              도착했습니다
+            </div>
+          )}
+        </section>
+
+        <section style={{
+          ...styles.status,
+          background: message.bg,
+          borderColor: message.color,
+        }}>
+          <div style={styles.statusHead}>
+            <span style={{ ...styles.statusLabel, color: message.color }}>{message.label}</span>
+            <span style={styles.statusTarget}>
+              {isRunning ? "세션 유지 중" : isListening ? "듣는 중" : "준비"}
             </span>
           </div>
+          <p style={styles.statusText}>{statusText}</p>
+        </section>
 
-          {/* 안내 시작/중지 */}
-          <div className="flex flex-col items-center gap-1.5">
+        {cameraError && <div style={styles.error}>{cameraError}</div>}
+
+        {isRunning ? (
+          <div style={styles.actions}>
             <button
-              onClick={isRunning ? stopNavigation : startNavigation}
-              aria-label={isRunning ? "안내 중지" : "안내 시작"}
-              disabled={navState === "arrived" || (!isRunning && !target.trim())}
-              className={[
-                "w-20 h-20 rounded-full font-bold text-base transition-all duration-200 active:scale-90",
-                "shadow-lg flex items-center justify-center flex-col gap-1",
-                isRunning
-                  ? "bg-gray-700 hover:bg-gray-600 shadow-gray-900"
-                  : !target.trim() || navState === "arrived"
-                  ? "bg-gray-800 opacity-40 cursor-not-allowed"
-                  : "bg-green-600 hover:bg-green-500 shadow-green-950",
-              ].join(" ")}
+              type="button"
+              onClick={queryDirection}
+              disabled={isQuerying}
+              style={{
+                ...styles.primaryAction,
+                opacity: isQuerying ? 0.62 : 1,
+                cursor: isQuerying ? "not-allowed" : "pointer",
+              }}
             >
-              {isRunning ? (
-                <>
-                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-6 h-6">
-                    <path fillRule="evenodd" d="M4.5 7.5a3 3 0 013-3h9a3 3 0 013 3v9a3 3 0 01-3 3h-9a3 3 0 01-3-3v-9z" clipRule="evenodd" />
-                  </svg>
-                  <span className="text-xs">중지</span>
-                </>
-              ) : (
-                <>
-                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-6 h-6">
-                    <path fillRule="evenodd" d="M4.5 5.653c0-1.426 1.529-2.33 2.779-1.643l11.54 6.348c1.295.712 1.295 2.573 0 3.285L7.28 19.991c-1.25.687-2.779-.217-2.779-1.643V5.653z" clipRule="evenodd" />
-                  </svg>
-                  <span className="text-xs">시작</span>
-                </>
-              )}
+              {isQuerying ? "확인 중" : "현재 위치 확인"}
             </button>
-            <span className="text-xs text-gray-600">{isRunning ? "안내 중" : "시작"}</span>
+            <button type="button" onClick={stopNavigation} style={styles.secondaryAction}>
+              중지
+            </button>
           </div>
-        </div>
-
-        {/* ── STT 인식 중 텍스트 ── */}
-        {(transcript || isListening) && (
-          <div className="glass-card rounded-xl px-4 py-3 text-center animate-fade-in">
-            <p className="text-sm text-gray-300">
-              {isListening
-                ? <span className="text-blue-400 animate-pulse">🎙 듣는 중...</span>
-                : `"${transcript}"`}
-            </p>
-          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={startNavigation}
+            disabled={navState === "arrived" || !target.trim()}
+            style={{
+              ...styles.startAction,
+              opacity: target.trim() && navState !== "arrived" ? 1 : 0.45,
+              cursor: target.trim() && navState !== "arrived" ? "pointer" : "not-allowed",
+            }}
+          >
+            보조 안내 시작
+          </button>
         )}
-
-        {/* ── 오류 표시 ── */}
-        {(cameraError || sttError) && (
-          <div className="rounded-xl bg-red-950/60 border border-red-700/50 px-4 py-3">
-            <p role="alert" className="text-red-400 text-sm text-center">
-              {cameraError || sttError}
-            </p>
-          </div>
-        )}
-
-        {/* ── 디버그 패널 ── */}
-        {lastDecision && (
-          <details className="text-xs text-gray-600 mt-1 w-full max-w-lg">
-            <summary className="cursor-pointer hover:text-gray-400 transition-colors select-none">
-              🔧 디버그 패널
-            </summary>
-            <div className="mt-2 p-3 bg-gray-900/80 rounded-xl border border-gray-800 space-y-2">
-              {lastDecision.debug && (
-                <>
-                  <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-gray-400">
-                    <span className="text-gray-600">VLM 호출됨</span>
-                    <span className={lastDecision.debug.vlm_called ? "text-green-400" : "text-gray-600"}>
-                      {lastDecision.debug.vlm_called
-                        ? "✅ Yes"
-                        : lastDecision.cached
-                        ? "🔁 캐시 재전송"
-                        : "⏳ 쿨다운"}
-                    </span>
-                    <span className="text-gray-600">VLM 방향</span>
-                    <span className="text-white">{lastDecision.debug.vlm_direction || "—"}</span>
-                    <span className="text-gray-600">VLM 신뢰도</span>
-                    <span className={lastDecision.debug.vlm_confidence >= 0.6 ? "text-green-400" : "text-red-400"}>
-                      {lastDecision.debug.vlm_confidence?.toFixed(2) ?? "—"}
-                    </span>
-                    <span className="text-gray-600">VLM 거리</span>
-                    <span className="text-gray-400">{lastDecision.debug.vlm_goal_distance || "—"}</span>
-                    <span className="text-gray-600">확정 방향</span>
-                    <span className="text-blue-400">{lastDecision.debug.confirmed_direction}</span>
-                    <span className="text-gray-600">필터 버퍼</span>
-                    <span>{lastDecision.debug.filter_buffer_size}/3</span>
-                    <span className="text-gray-600">unknown 연속</span>
-                    <span className={lastDecision.debug.unknown_streak > 0 ? "text-amber-400" : "text-gray-400"}>
-                      {lastDecision.debug.unknown_streak}회
-                    </span>
-                    <span className="text-gray-600">장애물 거리</span>
-                    <span>{lastDecision.debug.obstacle_dist === 999 ? "없음" : `${lastDecision.debug.obstacle_dist?.toFixed(1)}m`}</span>
-                  </div>
-                  {lastDecision.debug.vlm_reasoning && (
-                    <p className="text-gray-500 border-t border-gray-800 pt-2 leading-snug">
-                      💬 {lastDecision.debug.vlm_reasoning}
-                    </p>
-                  )}
-                  <p className="text-gray-700 border-t border-gray-800 pt-2">
-                    YOLO: {lastDecision.yolo_context || "탐지 없음"}
-                  </p>
-                </>
-              )}
-            </div>
-          </details>
-        )}
-
       </div>
     </main>
   );

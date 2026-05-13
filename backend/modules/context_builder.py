@@ -16,26 +16,23 @@ from typing import List, Dict, Set
 # ── 물리적 장애물 클래스 (복도 내 충돌 위험 있는 것만) ──────────────────────
 OBSTACLE_CLASSES: Set[str] = {
     "person",           # 사람
-    "bicycle",          # 자전거 (복도 주차 종종 있음)
     "chair",            # 의자
-    "bench",            # 벤치
-    "stairs",           # 계단 (위험도 높음)
-    "fire_extinguisher",# 소화기 (벽 돌출)
+    "stair",            # 계단 (일부 모델/커스텀 클래스명)
+    "stairs",           # 계단 ★ 커스텀 파인튜닝 신규 클래스
+    "glass_door",       # 유리문/유리창 ★ 커스텀 파인튜닝 신규 클래스
     "trash_can",        # 쓰레기통
     "table",            # 테이블
-    "backpack",         # 바닥에 놓인 가방
-    "suitcase",         # 여행가방
-    "umbrella",         # 우산 (바닥에 세워진 경우)
-    "potted plant",     # 화분
     "column",           # 기둥
-    "couch",            # 소파 (일부 건물 복도)
+    # NOTE: elevator는 목표물(INFO_CLASSES)이므로 장애물에서 제외
+    # NOTE: door는 열고 들어가는 것이므로 장애물에서 제외
 }
 
 # ── 정보성 클래스 (VLM 컨텍스트 제공용, 장애물 판정 제외) ───────────────────
 INFO_CLASSES: Set[str] = {
     "door",             # 문 — 목표 방향 추론에 유용
     "sign",             # 표지판 — 목적지 위치 파악
-    "elevator",         # 엘리베이터 — 목표물
+    "elevator",         # 엘리베이터 — 목표물 + 장애물 겸용
+    "elevator_button",  # 엘리베이터 호출 버튼 — 위치 파악용
     "toilet",           # 화장실 — 목표물
     "classroom",        # 강의실 — 목표물
 }
@@ -47,7 +44,10 @@ CLASS_KO = {
     "bicycle":           "자전거",
     "chair":             "의자",
     "bench":             "벤치",
+    "stair":             "계단",
     "stairs":            "계단",
+    "glass_door":        "유리문",
+    "elevator":          "엘리베이터",
     "fire_extinguisher": "소화기",
     "trash_can":         "쓰레기통",
     "table":             "테이블",
@@ -59,8 +59,10 @@ CLASS_KO = {
     "couch":             "소파",
     # 정보성
     "door":              "문",
+    "glass_door":        "유리문",
     "sign":              "표지판",
     "elevator":          "엘리베이터",
+    "elevator_button":   "엘리베이터 버튼",
     "toilet":            "화장실",
     "classroom":         "강의실",
 }
@@ -185,5 +187,5 @@ def build_obstacle_summary(detections: List[Dict], frame_width: int = 640) -> Di
         "closest_class": CLASS_KO.get(cls_en, cls_en),
         "closest_distance": distance,
         "direction": _bbox_to_direction(bbox, frame_width),
-        "has_obstacle": distance < 2.0,
+        "has_obstacle": distance < 4.0,
     }

@@ -5,8 +5,10 @@ scene_memory.py
 """
 
 import time
-from collections import deque
+from collections import Counter, deque
 from typing import Dict, List, Optional
+
+from backend.modules.context_builder import CLASS_KO
 
 
 class SceneMemory:
@@ -79,7 +81,7 @@ class SceneMemory:
         str or None
             "left" / "right" / "straight" / None
         """
-        for entry in reversed(list(self._buffer)):
+        for entry in reversed(self._buffer):
             direction = entry.get("vlm", {}).get("goal_direction")
             if direction and direction != "unknown":
                 return direction
@@ -95,9 +97,6 @@ class SceneMemory:
         str
             예: "최근 탐지: 사람(3회), 의자(2회)"
         """
-        from collections import Counter
-        from backend.modules.context_builder import CLASS_KO
-
         recent = self.get_recent(n=5)
         if not recent:
             return "최근 탐지 없음"

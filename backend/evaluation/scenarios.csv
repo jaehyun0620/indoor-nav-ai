@@ -1,0 +1,26 @@
+id,video_path,target,gt_direction,has_obstacle,target_visible,timestamp_sec,memo
+elev_01,backend/evaluation/videos/elev_01.jpg,엘리베이터,straight,False,True,-1,엘리베이터 정면(YOLO conf 0.80)
+elev_02,backend/evaluation/videos/elev_02.jpg,엘리베이터,straight,False,True,-1,엘리베이터 정면(YOLO conf 0.84)
+elev_03,backend/evaluation/videos/elev_03.jpg,엘리베이터,straight,False,True,-1,엘리베이터 복수탐지(conf 0.75+)
+elev_04,backend/evaluation/videos/elev_04.jpg,엘리베이터,straight,False,True,-1,엘리베이터 탐지(conf 0.76)
+elev_05,backend/evaluation/videos/elev_05.jpg,엘리베이터,straight,False,True,-1,엘리베이터 탐지(conf 0.72)
+elev_06,backend/evaluation/videos/elev_06.jpg,엘리베이터,straight,False,True,-1,엘리베이터 탐지(conf 0.79)
+elev_07,backend/evaluation/videos/elev_07.jpg,엘리베이터,straight,False,True,-1,엘리베이터 탐지(conf 0.69)
+elev_08,backend/evaluation/videos/elev_08.jpg,엘리베이터,straight,False,True,-1,엘리베이터 탐지(conf 0.78)
+elev_09,backend/evaluation/videos/elev_09.jpg,엘리베이터,straight,False,True,-1,엘리베이터 탐지(conf 0.71)
+class_01,backend/evaluation/videos/class_01.jpg,강의실,straight,False,False,-1,복도 - 정보판 앞
+class_02,backend/evaluation/videos/class_02.jpg,강의실,straight,False,False,-1,복도 - 탐지 없음
+class_03,backend/evaluation/videos/class_03.jpg,강의실,straight,False,False,-1,복도 - 탐지 없음
+class_04,backend/evaluation/videos/class_04.jpg,강의실,straight,False,False,-1,복도 - 탐지 없음
+class_05,backend/evaluation/videos/class_05.jpg,강의실,straight,False,False,-1,복도 - 탐지 없음
+class_06,backend/evaluation/videos/class_06.jpg,강의실,straight,False,False,-1,복도 - 탐지 없음
+class_07,backend/evaluation/videos/class_07.jpg,강의실,straight,False,False,-1,복도 - 탐지 없음
+class_08,backend/evaluation/videos/class_08.jpg,강의실,straight,False,False,-1,복도 - 탐지 없음
+toilet_01,backend/evaluation/videos/toilet_01.jpg,화장실,unknown,True,False,-1,계단 탐지(conf 0.93) 장애물 경고
+toilet_02,backend/evaluation/videos/toilet_02.jpg,화장실,unknown,True,False,-1,계단 강탐지(conf 0.84+) 장애물
+toilet_03,backend/evaluation/videos/toilet_03.jpg,화장실,unknown,True,False,-1,계단 강탐지(conf 0.89+) 장애물
+toilet_04,backend/evaluation/videos/toilet_04.jpg,화장실,unknown,True,False,-1,계단 탐지(conf 0.80+) 장애물
+toilet_05,backend/evaluation/videos/toilet_05.jpg,화장실,unknown,True,False,-1,계단 탐지(conf 0.80+) 장애물
+toilet_06,backend/evaluation/videos/toilet_06.jpg,화장실,unknown,True,False,-1,계단 탐지(conf 0.71) 장애물
+toilet_07,backend/evaluation/videos/toilet_07.jpg,화장실,unknown,True,False,-1,계단 탐지(conf 0.76+) 장애물
+toilet_08,backend/evaluation/videos/toilet_08.jpg,화장실,unknown,True,False,-1,계단 탐지(conf 0.68) 장애물

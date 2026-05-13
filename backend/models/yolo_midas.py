@@ -186,7 +186,7 @@ class YOLOMiDaSWrapper:
         midas_model: str = "small",       # DA2 모델 크기: small / base / large
         conf_threshold: float = 0.4,
         scale_factor: float = 1.0,        # DA2는 미터 단위 직접 출력, 사용 안 함
-        depth_interval: int = 5,          # DA2를 몇 프레임마다 실행할지
+        depth_interval: int = 2,          # DA2를 몇 프레임마다 실행할지
     ):
         """
         Parameters
@@ -211,6 +211,27 @@ class YOLOMiDaSWrapper:
         self.scale_factor = scale_factor
         self.model_size = midas_model
         self.depth_interval = int(os.getenv("DA2_DEPTH_INTERVAL", str(depth_interval)))
+        # 복도에서 실제로 나타날 수 있는 장애물 클래스만 허용
+        self.valid_classes = {
+            "person",
+            "chair",
+            "stair",
+            "stairs",
+        }
+
+        # ── 클래스별 confidence 임계값 오버라이드 ────────────────────────────
+        # 복도 환경에서 오탐이 많은 클래스는 전역 threshold보다 높게 설정한다.
+        # 환경변수로도 조정 가능: YOLO_CONF_PERSON=0.65
+        self.class_conf_overrides: dict = {
+            "person": float(os.getenv("YOLO_CONF_PERSON", "0.65")),
+            # 필요 시 추가: "chair": 0.55, "bicycle": 0.60
+        }
+
+        # ── 최소 bbox 크기 필터 ──────────────────────────────────────────────
+        # 프레임 전체 면적 대비 bbox 면적이 이 비율 미만이면 noise로 제거.
+        # 너무 작은 bbox는 멀리 있거나 배경 패턴으로 인한 오탐일 가능성이 높다.
+        # 환경변수: YOLO_MIN_BBOX_RATIO=0.015
+        self.min_bbox_area_ratio: float = float(os.getenv("YOLO_MIN_BBOX_RATIO", "0.015"))
 
         # 깊이맵 캐시
         self._depth_cache: Optional[np.ndarray] = None
@@ -234,18 +255,22 @@ class YOLOMiDaSWrapper:
                 [{"class": str, "bbox": [...], "distance_m": float, "conf": float}, ...]
             fast_result : 우선순위 모듈용 요약 dict
         """
-        from backend.modules.context_builder import CLASS_KO, build_obstacle_summary
+        from backend.modules.context_builder import build_obstacle_summary
 
         # 1) DA2 깊이맵 — depth_interval 프레임마다 갱신, 나머지는 캐시 재사용
-        self._frame_count += 1
+        # 카운터를 증가 전에 체크해야 depth_interval=2 시 프레임 1,3,5... 에서 실행됨
+        # (증가 후 체크하면 첫 프레임(count=1)과 두 번째 프레임(count=2)이 연속 실행되는 off-by-one 발생)
         if self._depth_cache is None or self._frame_count % self.depth_interval == 0:
             self._depth_cache = estimate_depth_map(frame_bgr)
+        self._frame_count += 1
 
         depth_map = self._depth_cache
 
         # 2) YOLO 탐지 (매 프레임 실행)
         results = self.model(frame_bgr, conf=self.conf_threshold, verbose=False)
         detections: List[Dict] = []
+
+        frame_area = frame_bgr.shape[0] * frame_bgr.shape[1]  # H × W
 
         for result in results:
             for box in result.boxes:
@@ -254,6 +279,21 @@ class YOLOMiDaSWrapper:
                 conf = float(box.conf[0])
                 x1, y1, x2, y2 = box.xyxy[0].tolist()
                 bbox = [x1, y1, x2, y2]
+
+                if cls_name not in self.valid_classes:
+                    continue  # 복도에 없는 클래스 무시
+
+                # ── 필터 1: 클래스별 confidence threshold ─────────────────
+                # 오탐이 많은 클래스(person 등)는 더 높은 기준 적용
+                class_threshold = self.class_conf_overrides.get(cls_name, self.conf_threshold)
+                if conf < class_threshold:
+                    continue
+
+                # ── 필터 2: 최소 bbox 크기 ────────────────────────────────
+                # 프레임 면적 대비 너무 작은 bbox는 noise로 제거
+                bbox_area = (x2 - x1) * (y2 - y1)
+                if bbox_area / frame_area < self.min_bbox_area_ratio:
+                    continue
 
                 # 3) 캐시된 깊이맵에서 bbox 중심 거리 조회
                 distance_m = bbox_center_depth(depth_map, bbox)

@@ -6,6 +6,7 @@ navigation_session.py
   idle → navigating → arrived
 """
 
+import itertools
 import re
 import time
 from collections import deque
@@ -69,8 +70,8 @@ class NavigationSession:
         if current_direction == "unknown" or len(self._direction_history) < 3:
             return ""
 
-        recent = list(self._direction_history)[-3:]
-        if all(d == current_direction for d in recent):
+        # deque를 list로 복사하지 않고 islice(reversed())로 최근 3개만 순회
+        if all(d == current_direction for d in itertools.islice(reversed(self._direction_history), 3)):
             label = {"left": "왼쪽", "right": "오른쪽", "straight": "직진"}.get(current_direction, "")
             return f"{label} 방향으로 잘 가고 있습니다"
 

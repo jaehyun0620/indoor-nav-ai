@@ -1,14 +1,13 @@
 """
 consistency_filter.py
 VLM 응답의 일관성을 검증하는 필터.
-deque(maxlen=3) 버퍼 + TTL + 다수결(2/3) 방향 확정.
+deque(maxlen=2) 버퍼 + TTL + 다수결(2/2) 방향 확정.
 
 TTL 설계 기준:
-  - VLM 호출 간격(SLOW_CHANNEL_INTERVAL, 기본 2.5초) * 버퍼크기(3) = 7.5초
-  - 여유 margin 4.5초 추가 → 기본 TTL = 12초
-  - TTL이 호출 간격보다 짧으면 버퍼가 항상 비어 방향 확정 불가
-  - TTL이 너무 길면(30초) 사용자가 방향을 틀어도 이전 결과가 유효로 남아
-    틀린 방향을 계속 안내하는 문제 발생 → 12초로 단축
+  - VLM 호출 간격(SLOW_CHANNEL_INTERVAL, 기본 3초) * 버퍼크기(2) = 6초
+  - TTL = 5초: 2회 호출(~6초) 내에서 유효하되, 방향 전환 시 빠르게 무효화
+  - buffer_size=2, agree_threshold=2: 2/2 완전 합의 → 첫 확정까지 ~3-4초
+    (기존 3/3 → 9초 대비 3배 빠름)
 """
 
 from collections import deque, Counter
@@ -19,24 +18,22 @@ from typing import Tuple
 class ConsistencyFilter:
     def __init__(
         self,
-        buffer_size: int = 3,
+        buffer_size: int = 2,
         agree_threshold: int = 2,
-        conf_min: float = 0.6,   # 0.4 → 0.6 복원 (설계 원칙: confidence 0.6 미만은 unknown 처리)
-        ttl: float = 12.0,       # 30.0 → 12.0 (2.5초 간격 * 3 + 여유 4.5초)
+        conf_min: float = 0.6,
+        ttl: float = 5.0,
     ):
         """
         Parameters
         ----------
         buffer_size : int
-            최근 응답을 저장할 버퍼 크기 (기본 3)
+            최근 응답을 저장할 버퍼 크기 (기본 2, 기존 3에서 단축)
         agree_threshold : int
-            방향 확정에 필요한 최소 일치 횟수 (기본 2, 즉 3회 중 2회)
+            방향 확정에 필요한 최소 일치 횟수 (기본 2, 즉 2/2 완전 합의)
         conf_min : float
             이 값 미만의 confidence는 direction을 unknown으로 처리 (기본 0.6)
-            낮은 신뢰도 결과가 버퍼에 쌓이면 틀린 방향이 합의를 통과할 수 있음
         ttl : float
-            버퍼 항목 유효 시간 (초, 기본 12.0).
-            초과 항목은 유효하지 않으므로 방향 전환 후 빠르게 새 방향으로 전환됨
+            버퍼 항목 유효 시간 (초, 기본 5.0, 기존 12.0에서 단축)
         """
         self.buffer: deque = deque(maxlen=buffer_size)
         self.agree_threshold = agree_threshold

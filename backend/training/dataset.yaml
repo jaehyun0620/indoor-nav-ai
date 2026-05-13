@@ -1,0 +1,22 @@
+# dataset.yaml — 커스텀 실내 장애물 감지 데이터셋
+#
+# 사용법:
+#   yolo train model=yolov8n.pt data=backend/training/dataset.yaml \
+#              epochs=100 imgsz=640 device=mps batch=16
+#
+# 이미지/라벨 경로는 이 yaml 기준 상대경로
+
+path: /Users/jaehyun/ai_capstone/capstone/backend/training/dataset
+train: images/train
+val:   images/val
+
+# 클래스 수
+# ※ Roboflow 1차 데이터: elevator(0), stairs(1) 2개 클래스
+#    추후 glass_door, door, elevator_button 추가 예정
+nc: 2
+
+# 클래스 이름 (인덱스 순서 고정 — 라벨 파일의 숫자와 일치해야 함)
+# ※ Roboflow export 기준: 0=elevator, 1=stairs
+names:
+  0: elevator         # 엘리베이터 전체 (문+버튼+층수표시)
+  1: stairs           # 계단 (낙상 위험)

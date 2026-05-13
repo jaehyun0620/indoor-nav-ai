@@ -10,10 +10,21 @@ priority_module.py
 from typing import Dict
 
 
+def _josa(word: str, jongseong: str, no_jongseong: str) -> str:
+    """한국어 받침 유무에 따라 올바른 조사를 반환한다."""
+    if not word:
+        return no_jongseong
+    last = word[-1]
+    if 0xAC00 <= ord(last) <= 0xD7A3:
+        has_batchim = (ord(last) - 0xAC00) % 28 != 0
+        return jongseong if has_batchim else no_jongseong
+    return no_jongseong
+
+
 class PriorityModule:
     # 즉각 경고 거리 임계값 (m)
-    CRITICAL_DISTANCE = 1.0
-    CAUTION_DISTANCE = 2.0
+    CRITICAL_DISTANCE = 2.0
+    CAUTION_DISTANCE = 4.0
 
     def decide(self, fast_result: Dict, slow_result: Dict) -> Dict:
         """
@@ -55,9 +66,10 @@ class PriorityModule:
 
         # ── 경로 A: 즉각 경고 ──────────────────────────────────────────────
         if distance < self.CRITICAL_DISTANCE:
+            particle = _josa(obj_class, "이", "가")
             return {
                 "message_type": "warning",
-                "tts_text": f"즉시 멈추세요. {obj_class}이 있습니다.",
+                "tts_text": f"즉시 멈추세요. {obj_class}{particle} 있습니다.",
                 "priority": 1,
                 "suppress_guidance": True,
             }

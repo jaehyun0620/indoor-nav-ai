@@ -31,7 +31,7 @@ class FastChannel:
         midas_model: str = "small",
         conf_threshold: float = 0.6,   # 🔥 강화
         scale_factor: float = 1.0,
-        depth_interval: int = 5,
+        depth_interval: int = 2,
     ):
         self.wrapper = YOLOMiDaSWrapper(
             yolo_model=yolo_model,
@@ -61,7 +61,7 @@ class FastChannel:
         filtered = []
 
         for det in detections:
-            conf = det.get("confidence", 0)
+            conf = det.get("conf", 0)
             dist = det.get("distance_m", 999)
             bbox = det.get("bbox", [0, 0, 0, 0])
             cls = det.get("class", "")
@@ -90,14 +90,28 @@ class FastChannel:
         # ─────────────────────────────
         # 2. temporal 안정화
         # ─────────────────────────────
-        stable = []
+        # 안전 우선 임계 거리: 이 거리 이내 장애물은 temporal 필터 없이 즉시 통과
+        SAFETY_DIST = 3.0  # m  (필터3 상한인 5.0m 와 구분된 값)
 
-        for det in filtered:
-            for prev in self.prev_detections:
-                # 거리 유사하면 같은 객체로 판단
-                if abs(det["distance_m"] - prev["distance_m"]) < 0.5:
+        if not self.prev_detections:
+            # 첫 프레임 또는 reset 직후 — 비교 대상 없으므로 필터 없이 통과
+            stable = filtered
+        else:
+            stable = []
+            for det in filtered:
+                # SAFETY_DIST 이내: 안전 우선으로 즉시 통과 (1프레임 지연 없음)
+                if det["distance_m"] <= SAFETY_DIST:
                     stable.append(det)
-                    break
+                    continue
+                # SAFETY_DIST 초과 (3~5m): 이전 프레임에도 비슷한 거리에 같은 클래스가
+                # 있었던 경우에만 stable에 포함 → 노이즈성 오탐 제거
+                for prev in self.prev_detections:
+                    if (
+                        prev.get("class") == det.get("class")
+                        and abs(det["distance_m"] - prev["distance_m"]) < 0.8
+                    ):
+                        stable.append(det)
+                        break
 
         # 다음 프레임을 위해 저장
         self.prev_detections = filtered

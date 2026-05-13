@@ -10,6 +10,7 @@ slow_channel.py
 """
 
 import base64
+import json
 import os
 from typing import Dict, Optional
 
@@ -41,8 +42,12 @@ class VLMClient:
             provider
             or os.getenv("VLM_PROVIDER", "openai")
         ).lower()
+        self.mock_enabled = os.getenv("MOCK_VLM", "false").lower() in ("1", "true", "yes", "on")
 
-        if self.provider == "openai":
+        if self.mock_enabled:
+            self.api_key = ""
+            self.model = "mock-vlm"
+        elif self.provider == "openai":
             self.api_key = os.getenv("OPENAI_API_KEY", "")
             self.model = os.getenv("OPENAI_MODEL", "gpt-4o")
         elif self.provider == "gemini":
@@ -70,9 +75,57 @@ class VLMClient:
         str
             VLM 응답 텍스트 (JSON 문자열 기대)
         """
+        if self.mock_enabled:
+            return self._call_mock(prompt)
+
         if self.provider == "openai":
             return await self._call_openai(prompt, image_bytes)
         return await self._call_gemini(prompt, image_bytes)
+
+    def _call_mock(self, prompt: str) -> str:
+        """
+        집/오프라인 테스트용 VLM 대체 응답.
+        실제 이미지를 분석하지 않고 환경변수 값으로 JSON을 만들어
+        WebSocket, 필터, TTS, UI 흐름을 비용 없이 검증한다.
+        """
+        direction = os.getenv("MOCK_VLM_DIRECTION", "straight").lower()
+        if direction not in ("left", "right", "straight", "unknown"):
+            direction = "unknown"
+
+        confidence = float(os.getenv("MOCK_VLM_CONFIDENCE", "0.85"))
+        visible = os.getenv("MOCK_VLM_VISIBLE", "true").lower() in ("1", "true", "yes", "on")
+        distance = os.getenv("MOCK_VLM_DISTANCE", "약 5m")
+
+        target = "목적지"
+        if "━━━ 목표물 ━━━" in prompt:
+            target = prompt.split("━━━ 목표물 ━━━", 1)[1].strip().splitlines()[0].strip() or target
+        elif "목표물:" in prompt:
+            target = prompt.split("목표물:", 1)[1].splitlines()[0].strip() or target
+        target = target.split(" ", 1)[0]
+
+        label = {
+            "left": "왼쪽",
+            "right": "오른쪽",
+            "straight": "정면",
+            "unknown": "알 수 없는 방향",
+        }[direction]
+
+        tts_message = os.getenv(
+            "MOCK_VLM_TTS",
+            f"테스트 모드입니다. {target} 안내는 {label} 방향입니다.",
+        )
+
+        return json.dumps(
+            {
+                "goal_visible": visible,
+                "goal_direction": direction,
+                "goal_distance": distance if visible else "unknown",
+                "confidence": confidence,
+                "reasoning": "MOCK_VLM 테스트 모드에서 생성한 응답",
+                "tts_message": tts_message,
+            },
+            ensure_ascii=False,
+        )
 
     async def _call_openai(self, prompt: str, image_bytes: bytes) -> str:
         b64 = base64.b64encode(image_bytes).decode("utf-8")

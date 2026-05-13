@@ -1,10 +1,16 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 
 export default function VoiceButton({ isListening, onStart, onStop, disabled }) {
-  // 진동 피드백 (모바일)
+  const hasMountedRef = useRef(false);
+
+  // 진동 피드백 (모바일) — 마운트 시 초기 실행은 건너뜀
   useEffect(() => {
+    if (!hasMountedRef.current) {
+      hasMountedRef.current = true;
+      return;
+    }
     if (!navigator.vibrate) return;
     if (isListening) {
       navigator.vibrate(50);

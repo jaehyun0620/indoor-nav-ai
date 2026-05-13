@@ -4,6 +4,8 @@ VLM에 전달할 구조화 프롬프트를 생성하는 모듈.
 JSON 응답 형식 강제 + confidence 기반 unknown 처리 규칙 포함.
 """
 
+import json
+import re
 from typing import List, Dict
 
 
@@ -174,9 +176,6 @@ def parse_vlm_response(response_text: str) -> Dict:
             "reasoning": str
         }
     """
-    import json
-    import re
-
     default = {
         "goal_visible": False,
         "goal_direction": "unknown",
@@ -188,8 +187,11 @@ def parse_vlm_response(response_text: str) -> Dict:
     if not response_text:
         return default
 
-    # 응답에서 JSON 블록 추출 (마크다운 코드블록 포함 대응)
-    json_match = re.search(r"\{[\s\S]*\}", response_text)
+    # 마크다운 코드블록 제거 (```json ... ``` 또는 ``` ... ```)
+    cleaned = re.sub(r"```(?:json)?\s*|\s*```", "", response_text).strip()
+
+    # 응답에서 JSON 블록 추출
+    json_match = re.search(r"\{[\s\S]*\}", cleaned)
     if not json_match:
         return default
 
