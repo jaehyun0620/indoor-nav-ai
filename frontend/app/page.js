@@ -4,8 +4,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useSTT } from "./hooks/useSTT";
 import { useTTS } from "./hooks/useTTS";
 
-const WS_URL = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000")
-  .replace(/^http/, "ws") + "/ws/navigate";
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "https://indoor-nav-ai-production.up.railway.app";
+const WS_URL = API_BASE.replace(/^http/, "ws") + "/ws/navigate";
 
 const CAPTURE_INTERVAL_MS = 200;
 

@@ -17,7 +17,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
  *     pending 초기화 → 진행 중 fetch AbortController로 취소 → 오디오 중단 → 즉시 재생
  */
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "https://indoor-nav-ai-production.up.railway.app";
 
 export function useTTS() {
   const [isSpeaking, setIsSpeaking] = useState(false);
