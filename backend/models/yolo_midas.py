@@ -206,18 +206,29 @@ class YOLOMiDaSWrapper:
         if not _YOLO_AVAILABLE:
             raise ImportError("ultralytics 패키지가 설치되지 않았습니다. pip install ultralytics")
 
+        # ── 커스텀 모델: elevator / stairs 전용 ──────────────────────────────
         self.model = _YOLO(yolo_model)
+
+        # ── 기본 모델: person / chair 등 COCO 일반 장애물 전용 ───────────────
+        # 커스텀 파인튜닝으로 사람 감지 능력이 없어진 것을 보완
+        base_model_path = os.getenv("YOLO_BASE_MODEL", "yolov8n.pt")
+        try:
+            self.base_model = _YOLO(base_model_path)
+        except Exception:
+            self.base_model = None
+
         self.conf_threshold = conf_threshold
         self.scale_factor = scale_factor
         self.model_size = midas_model
         self.depth_interval = int(os.getenv("DA2_DEPTH_INTERVAL", str(depth_interval)))
-        # 복도에서 실제로 나타날 수 있는 장애물 클래스만 허용
-        self.valid_classes = {
-            "person",
-            "chair",
-            "stair",
-            "stairs",
-        }
+
+        # 커스텀 모델이 탐지할 클래스 (파인튜닝한 것)
+        self.custom_classes = {"elevator", "stairs", "stair"}
+        # 기본 모델이 탐지할 클래스 (COCO 중 복도 장애물)
+        self.base_classes = {"person", "chair", "table", "suitcase", "backpack",
+                             "stairs", "stair"}
+        # 전체 허용 클래스
+        self.valid_classes = self.custom_classes | self.base_classes
 
         # ── 클래스별 confidence 임계값 오버라이드 ────────────────────────────
         # 복도 환경에서 오탐이 많은 클래스는 전역 threshold보다 높게 설정한다.
@@ -267,43 +278,44 @@ class YOLOMiDaSWrapper:
         depth_map = self._depth_cache
 
         # 2) YOLO 탐지 (매 프레임 실행)
-        results = self.model(frame_bgr, conf=self.conf_threshold, verbose=False)
+        frame_area = frame_bgr.shape[0] * frame_bgr.shape[1]
         detections: List[Dict] = []
 
-        frame_area = frame_bgr.shape[0] * frame_bgr.shape[1]  # H × W
+        def _extract(results, allowed_classes):
+            """YOLO 결과에서 허용 클래스만 필터링해 반환"""
+            found = []
+            for result in results:
+                for box in result.boxes:
+                    cls_id  = int(box.cls[0])
+                    cls_name = result.names[cls_id]
+                    conf    = float(box.conf[0])
+                    x1, y1, x2, y2 = box.xyxy[0].tolist()
+                    bbox    = [x1, y1, x2, y2]
 
-        for result in results:
-            for box in result.boxes:
-                cls_id = int(box.cls[0])
-                cls_name = result.names[cls_id]
-                conf = float(box.conf[0])
-                x1, y1, x2, y2 = box.xyxy[0].tolist()
-                bbox = [x1, y1, x2, y2]
+                    if cls_name not in allowed_classes:
+                        continue
 
-                if cls_name not in self.valid_classes:
-                    continue  # 복도에 없는 클래스 무시
+                    class_threshold = self.class_conf_overrides.get(cls_name, self.conf_threshold)
+                    if conf < class_threshold:
+                        continue
 
-                # ── 필터 1: 클래스별 confidence threshold ─────────────────
-                # 오탐이 많은 클래스(person 등)는 더 높은 기준 적용
-                class_threshold = self.class_conf_overrides.get(cls_name, self.conf_threshold)
-                if conf < class_threshold:
-                    continue
+                    bbox_area = (x2 - x1) * (y2 - y1)
+                    if bbox_area / frame_area < self.min_bbox_area_ratio:
+                        continue
 
-                # ── 필터 2: 최소 bbox 크기 ────────────────────────────────
-                # 프레임 면적 대비 너무 작은 bbox는 noise로 제거
-                bbox_area = (x2 - x1) * (y2 - y1)
-                if bbox_area / frame_area < self.min_bbox_area_ratio:
-                    continue
+                    distance_m = bbox_center_depth(depth_map, bbox)
+                    found.append({"class": cls_name, "bbox": bbox,
+                                  "distance_m": distance_m, "conf": conf})
+            return found
 
-                # 3) 캐시된 깊이맵에서 bbox 중심 거리 조회
-                distance_m = bbox_center_depth(depth_map, bbox)
+        # 메인 모델 실행 (yolov8n.pt 단독 또는 커스텀 모델)
+        main_results = self.model(frame_bgr, conf=self.conf_threshold, verbose=False)
+        detections += _extract(main_results, self.valid_classes)
 
-                detections.append({
-                    "class": cls_name,
-                    "bbox": bbox,
-                    "distance_m": distance_m,
-                    "conf": conf,
-                })
+        # 기본 모델이 별도로 있으면 추가 탐지 (커스텀+기본 듀얼 모드)
+        if self.base_model is not None:
+            base_results = self.base_model(frame_bgr, conf=self.conf_threshold, verbose=False)
+            detections += _extract(base_results, self.base_classes)
 
         # 4) 가장 가까운 장애물 요약
         summary = build_obstacle_summary(detections, frame_width=frame_bgr.shape[1])

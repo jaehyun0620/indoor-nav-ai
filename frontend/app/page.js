@@ -302,6 +302,8 @@ export default function HomePage() {
   const frameReadyRef = useRef(false);
   const rvcHandleRef = useRef(null);
   const lastSpokenRef = useRef({ text: "", type: "", at: 0 });
+  const tapCountRef = useRef(0);
+  const tapTimerRef = useRef(null);
 
   const [target, setTarget] = useState("");
   const [navState, setNavState] = useState("idle");
@@ -317,18 +319,6 @@ export default function HomePage() {
   const direction = DIRECTION[decision?.direction] || DIRECTION.unknown;
   const messageType = decision?.message_type || (isRunning ? "monitoring" : "ready");
   const message = MESSAGE[messageType] || MESSAGE.monitoring;
-
-  useEffect(() => {
-    if (!transcript || navState !== "idle") return;
-    const cleaned = transcript
-      .replace(/찾아줘|가고\s?싶어|어디야|알려줘|데려다줘|가자|가줘|보여줘|어디에|어디로/g, "")
-      .trim();
-    if (cleaned.length >= 1) {
-      setTarget(cleaned);
-      speak(`목적지를 ${cleaned}(으)로 설정했습니다`);
-      resetSTT();
-    }
-  }, [transcript, navState, speak, resetSTT]);
 
   const startCamera = useCallback(async () => {
     setCameraError(null);
@@ -430,12 +420,17 @@ export default function HomePage() {
     const elapsed = now - prev.at;
 
     if (message_type === "warning") {
-      speak(tts_text, true);
-      lastSpokenRef.current = { text: tts_text, type: message_type, at: now };
+      // 같은 경고 텍스트는 5초 쿨다운 — 매 프레임 interrupt로 음성이 잘리는 현상 방지
+      if (tts_text !== prev.text || elapsed > 5000) {
+        speak(tts_text, true);
+        lastSpokenRef.current = { text: tts_text, type: message_type, at: now };
+      }
       return;
     }
 
     if (message_type === "caution") {
+      // warning 직후 5초 이내에는 caution 억제 — warning↔caution 진동으로 음성 끊김 방지
+      if (prev.type === "warning" && elapsed < 5000) return;
       if (tts_text !== prev.text || elapsed > 4000) {
         speak(tts_text, false);
         lastSpokenRef.current = { text: tts_text, type: message_type, at: now };
@@ -457,13 +452,15 @@ export default function HomePage() {
     }
   }, [speak, stopTTS, stopFrameCache, stopCamera]);
 
-  const startNavigation = useCallback(async () => {
+  const startNavigation = useCallback(async (navTarget) => {
+    const dest = (navTarget || target).trim();
+    if (!dest) return;
     await startCamera();
     const ws = new WebSocket(WS_URL);
     wsRef.current = ws;
 
     ws.onopen = () => {
-      ws.send(JSON.stringify({ action: "start", target }));
+      ws.send(JSON.stringify({ action: "start", target: dest }));
       setNavState("navigating");
       setWsConnected(true);
       setDecision(null);
@@ -497,6 +494,21 @@ export default function HomePage() {
     };
   }, [target, startCamera, startFrameCache, stopFrameCache, handleMessage]);
 
+  // STT 인식 완료 → 목적지 설정 + 즉시 안내 시작
+  // (startNavigation 정의 이후에 위치해야 const TDZ 오류가 발생하지 않음)
+  useEffect(() => {
+    if (!transcript || navState !== "idle") return;
+    const cleaned = transcript
+      .replace(/찾아줘|가고\s?싶어|어디야|알려줘|데려다줘|가자|가줘|보여줘|어디에|어디로/g, "")
+      .trim();
+    if (cleaned.length >= 1) {
+      setTarget(cleaned);
+      speak(`${cleaned} 안내를 시작합니다`);
+      resetSTT();
+      setTimeout(() => startNavigation(cleaned), 1400);
+    }
+  }, [transcript, navState, speak, resetSTT, startNavigation]);
+
   const stopNavigation = useCallback(() => {
     const ws = wsRef.current;
     if (ws?.readyState === WebSocket.OPEN) {
@@ -527,18 +539,57 @@ export default function HomePage() {
 
   useEffect(() => () => {
     clearInterval(intervalRef.current);
+    if (tapTimerRef.current) clearTimeout(tapTimerRef.current);
     wsRef.current?.close();
     stopCamera();
   }, [stopCamera]);
 
   const statusText = isRunning
-    ? decision?.tts_text || "장애물 감시 중입니다."
+    ? decision?.tts_text || "화면을 한 번 터치하면 방향을 안내해 드립니다."
     : target
       ? `${target} 안내를 시작할 수 있습니다.`
       : "목적지를 선택하세요.";
 
+  // ── 화면 탭 접근성 (시각장애인용) ──────────────────────────────────────────
+  // 버튼/입력 영역을 제외한 화면 아무 곳이나 탭
+  //   한 번  : 대기 중 → 목적지 음성 입력 / 안내 중 → 방향 즉시 조회
+  //   두 번  : 대기 중(목적지 설정됨) → 안내 시작 / 안내 중 → 안내 중지
+  const handleScreenTap = useCallback(
+    (e) => {
+      const tag = e.target.tagName;
+      if (tag === "BUTTON" || tag === "INPUT") return;
+
+      tapCountRef.current += 1;
+      if (tapTimerRef.current) clearTimeout(tapTimerRef.current);
+
+      tapTimerRef.current = setTimeout(() => {
+        const count = tapCountRef.current;
+        tapCountRef.current = 0;
+
+        if (count === 1) {
+          if (navState === "idle") {
+            speak("목적지를 말씀하세요");
+            setTimeout(startSTT, 600);
+          } else if (navState === "navigating") {
+            queryDirection();
+          }
+        } else if (count >= 2) {
+          if (navState === "idle" && target.trim()) {
+            speak("안내를 시작합니다");
+            setTimeout(startNavigation, 500);
+          } else if (navState === "navigating") {
+            stopNavigation();
+          } else if (navState === "idle" && !target.trim()) {
+            speak("목적지를 먼저 설정해 주세요. 화면을 한 번 탭하면 음성으로 입력할 수 있습니다");
+          }
+        }
+      }, 300);
+    },
+    [navState, target, speak, startSTT, queryDirection, startNavigation, stopNavigation]
+  );
+
   return (
-    <main style={styles.page}>
+    <main style={styles.page} onClick={handleScreenTap}>
       <div style={styles.shell}>
         <header style={styles.header}>
           <div>
@@ -565,7 +616,11 @@ export default function HomePage() {
                   <button
                     key={item}
                     type="button"
-                    onClick={() => setTarget(item)}
+                    onClick={() => {
+                      setTarget(item);
+                      speak(`${item} 안내를 시작합니다`);
+                      setTimeout(() => startNavigation(item), 1000);
+                    }}
                     style={{
                       ...styles.targetButton,
                       borderColor: selected ? "#2563eb" : "#243244",
@@ -584,7 +639,10 @@ export default function HomePage() {
                 type="text"
                 value={target}
                 onChange={(e) => setTarget(e.target.value)}
-                placeholder="직접 입력"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && target.trim()) startNavigation();
+                }}
+                placeholder="직접 입력 후 Enter"
                 style={styles.input}
               />
               <button
