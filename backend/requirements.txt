@@ -7,7 +7,7 @@ python-dotenv>=1.0.0
 # AI/ML (torch/torchvision은 Dockerfile에서 CPU 전용으로 별도 설치)
 ultralytics>=8.1.0
 opencv-python>=4.9.0
-numpy>=1.26.0
+numpy>=1.26.0,<2.0
 Pillow>=10.2.0
 transformers>=4.40.0
 accelerate>=0.26.0

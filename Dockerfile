@@ -15,7 +15,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # torch CPU 전용 먼저 설치 (CUDA 포함 버전은 2GB+, CPU는 200MB)
 RUN pip install --no-cache-dir \
-    torch==2.2.0 torchvision==0.17.0 \
+    torch==2.4.0 torchvision==0.19.0 \
     --index-url https://download.pytorch.org/whl/cpu
 
 # 나머지 패키지 설치
