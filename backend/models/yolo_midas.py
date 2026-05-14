@@ -248,7 +248,8 @@ class YOLOMiDaSWrapper:
         self._depth_cache: Optional[np.ndarray] = None
         self._frame_count: int = 0
 
-        _load_depth_anything_v2(midas_model)
+        # DA2 모델은 첫 프레임 처리 시 지연 로드 (서버 시작 속도 개선)
+        # _load_depth_anything_v2(midas_model)  ← 서버 시작 시 제거
 
     def run(self, frame_bgr: np.ndarray) -> Tuple[List[Dict], Dict]:
         """
