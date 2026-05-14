@@ -5,7 +5,7 @@ WORKDIR /app
 # opencv, torch 등이 필요한 시스템 라이브러리
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libglib2.0-0 \
-    libgl1-mesa-glx \
+    libgl1 \
     libsm6 \
     libxext6 \
     libxrender-dev \
