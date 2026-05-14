@@ -4,10 +4,8 @@ python-multipart>=0.0.9
 httpx>=0.27.0
 python-dotenv>=1.0.0
 
-# AI/ML
+# AI/ML (torch/torchvision은 Dockerfile에서 CPU 전용으로 별도 설치)
 ultralytics>=8.1.0
-torch>=2.2.0
-torchvision>=0.17.0
 opencv-python>=4.9.0
 numpy>=1.26.0
 Pillow>=10.2.0
