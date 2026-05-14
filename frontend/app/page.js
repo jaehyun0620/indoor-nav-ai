@@ -576,7 +576,7 @@ export default function HomePage() {
         } else if (count >= 2) {
           if (navState === "idle" && target.trim()) {
             speak("안내를 시작합니다");
-            setTimeout(startNavigation, 500);
+            setTimeout(() => startNavigation(), 500);
           } else if (navState === "navigating") {
             stopNavigation();
           } else if (navState === "idle" && !target.trim()) {
@@ -760,7 +760,7 @@ export default function HomePage() {
         ) : (
           <button
             type="button"
-            onClick={startNavigation}
+            onClick={() => startNavigation()}
             disabled={navState === "arrived" || !target.trim()}
             style={{
               ...styles.startAction,
