@@ -8,13 +8,14 @@ python-dotenv>=1.0.0
 ultralytics>=8.1.0
 torch>=2.2.0
 torchvision>=0.17.0
-opencv-python>=4.9.0
+opencv-python-headless>=4.9.0
 numpy>=1.26.0
 Pillow>=10.2.0
-transformers>=4.40.0   # Depth Anything V2 Metric
+transformers>=4.40.0
+accelerate>=0.26.0
 
 # OCR
 easyocr>=1.7.1
 
-# TTS (선택)
+# TTS
 gTTS>=2.5.0
