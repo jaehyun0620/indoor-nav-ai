@@ -26,4 +26,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
+# 빌드 시점에 YOLO 모델 미리 다운로드 (런타임 다운로드 타임아웃 방지)
+RUN python3 -c "from ultralytics import YOLO; YOLO('yolov8n.pt')"
+
 CMD ["sh", "-c", "uvicorn backend.main:app --host 0.0.0.0 --port $PORT"]
