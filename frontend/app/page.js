@@ -313,6 +313,8 @@ export default function HomePage() {
   const [wsConnected, setWsConnected] = useState(false);
   const [isQuerying, setIsQuerying] = useState(false);
   const [cameraError, setCameraError] = useState(null);
+  const [cameraReady, setCameraReady] = useState(false);
+  const [debugInfo, setDebugInfo] = useState("초기 상태");
 
   const { transcript, isListening, start: startSTT, stop: stopSTT, reset: resetSTT } = useSTT();
   const { speak, stop: stopTTS, clearPending, isSpeaking } = useTTS();
@@ -324,8 +326,10 @@ export default function HomePage() {
 
   const startCamera = useCallback(async () => {
     // 이미 카메라 스트림이 활성화돼 있으면 중복 실행 방지
-    if (videoRef.current?.srcObject) return;
+    if (videoRef.current?.srcObject) return true;
     setCameraError(null);
+    setCameraReady(false);
+    setDebugInfo("카메라 권한 요청 중");
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: {
@@ -336,16 +340,23 @@ export default function HomePage() {
       });
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
-        await videoRef.current.play().catch(() => {});
+        await videoRef.current.play();
+        setCameraReady(true);
+        setDebugInfo("카메라 준비 완료");
       }
+      return true;
     } catch (e) {
-      setCameraError(`카메라 오류: ${e.message}`);
+      const message = `카메라 오류: ${e.message}`;
+      setCameraError(message);
+      setDebugInfo(message);
+      return false;
     }
   }, []);
 
   const stopCamera = useCallback(() => {
     videoRef.current?.srcObject?.getTracks().forEach((track) => track.stop());
     if (videoRef.current) videoRef.current.srcObject = null;
+    setCameraReady(false);
   }, []);
 
   const startFrameCache = useCallback(() => {
@@ -459,11 +470,14 @@ export default function HomePage() {
   const startNavigation = useCallback(async (navTarget) => {
     const dest = (navTarget || target).trim();
     if (!dest) return;
-    await startCamera();
+    const ok = await startCamera();
+    if (!ok) return;
+    setDebugInfo(`WebSocket 연결 시도: ${WS_URL}`);
     const ws = new WebSocket(WS_URL);
     wsRef.current = ws;
 
     ws.onopen = () => {
+      setDebugInfo("WebSocket 연결됨");
       ws.send(JSON.stringify({ action: "start", target: dest }));
       setNavState("navigating");
       setWsConnected(true);
@@ -481,13 +495,18 @@ export default function HomePage() {
 
     ws.onmessage = (e) => {
       try {
-        handleMessage(JSON.parse(e.data));
-      } catch {}
+        const parsed = JSON.parse(e.data);
+        setDebugInfo(`서버 응답: ${parsed.message_type || "unknown"}`);
+        handleMessage(parsed);
+      } catch {
+        setDebugInfo("서버 응답 파싱 실패");
+      }
     };
 
     ws.onerror = () => {
       console.error(`[WS] 연결 실패: ${WS_URL}`);
       setCameraError("서버 연결 오류");
+      setDebugInfo(`WebSocket 연결 실패: ${WS_URL}`);
       setNavState("idle");
       setWsConnected(false);
     };
@@ -496,6 +515,7 @@ export default function HomePage() {
       if (event.code !== 1000) {
         console.warn(`[WS] 연결 종료: ${WS_URL} code=${event.code}`);
       }
+      setDebugInfo(`WebSocket 종료: code=${event.code}`);
       clearInterval(intervalRef.current);
       stopFrameCache();
       setWsConnected(false);
@@ -532,16 +552,39 @@ export default function HomePage() {
     setWsConnected(false);
     setDecision(null);
     setIsQuerying(false);
+    setDebugInfo("안내 중지됨");
     speak("안내를 중지했습니다");
   }, [stopCamera, stopFrameCache, stopTTS, clearPending, speak]);
 
   const queryDirection = useCallback(() => {
     const ws = wsRef.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN || !frameReadyRef.current || isQuerying) return;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      const message = "서버 연결이 아직 준비되지 않았습니다.";
+      setCameraError(message);
+      setDebugInfo(`query 실패: WebSocket state=${ws?.readyState ?? "none"}`);
+      speak(message, false);
+      return;
+    }
+    if (!frameReadyRef.current) {
+      const message = "카메라 화면이 아직 준비되지 않았습니다. 잠시 후 다시 눌러주세요.";
+      setCameraError(message);
+      setDebugInfo("query 실패: frameReady=false");
+      speak(message, false);
+      return;
+    }
+    if (isQuerying) return;
     const b64 = canvasRef.current?.toDataURL("image/jpeg", 0.8);
-    if (!b64) return;
+    if (!b64) {
+      const message = "카메라 이미지를 캡처하지 못했습니다.";
+      setCameraError(message);
+      setDebugInfo("query 실패: canvas b64 없음");
+      speak(message, false);
+      return;
+    }
     ws.send(JSON.stringify({ action: "query", frame: b64, target }));
     setIsQuerying(true);
+    setCameraError(null);
+    setDebugInfo("query 전송 완료");
     speak("분석 중입니다", false);
   }, [target, speak, isQuerying]);
 
@@ -739,13 +782,34 @@ export default function HomePage() {
           <div style={styles.statusHead}>
             <span style={{ ...styles.statusLabel, color: message.color }}>{message.label}</span>
             <span style={styles.statusTarget}>
-              {isRunning ? "세션 유지 중" : isListening ? "듣는 중" : "준비"}
+              {isRunning ? (cameraReady ? "카메라 준비" : "카메라 준비 중") : isListening ? "듣는 중" : "준비"}
             </span>
           </div>
           <p style={styles.statusText}>{statusText}</p>
         </section>
 
         {cameraError && <div style={styles.error}>{cameraError}</div>}
+
+        <details style={{
+          border: "1px solid #1f2937",
+          borderRadius: 8,
+          background: "#0b1220",
+          color: "#94a3b8",
+          padding: "10px 12px",
+          fontSize: 12,
+          lineHeight: 1.5,
+        }}>
+          <summary style={{ cursor: "pointer", color: "#cbd5e1", fontWeight: 750 }}>
+            연결 진단
+          </summary>
+          <div style={{ marginTop: 8, wordBreak: "break-all" }}>
+            <div>API: {API_BASE}</div>
+            <div>WS: {WS_URL}</div>
+            <div>카메라: {cameraReady ? "ready" : "not ready"}</div>
+            <div>WebSocket: {wsConnected ? "connected" : "disconnected"}</div>
+            <div>마지막 상태: {debugInfo}</div>
+          </div>
+        </details>
 
         {isRunning ? (
           <div style={styles.actions}>
