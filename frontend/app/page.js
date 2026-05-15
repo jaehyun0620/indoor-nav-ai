@@ -4,7 +4,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useSTT } from "./hooks/useSTT";
 import { useTTS } from "./hooks/useTTS";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "https://indoor-nav-ai-production.up.railway.app";
+const API_BASE = (
+  process.env.NEXT_PUBLIC_API_URL || "https://indoor-nav-ai-production.up.railway.app"
+).replace(/\/+$/, "");
 const WS_URL = API_BASE.replace(/^http/, "ws") + "/ws/navigate";
 
 const CAPTURE_INTERVAL_MS = 200;
@@ -484,12 +486,16 @@ export default function HomePage() {
     };
 
     ws.onerror = () => {
+      console.error(`[WS] 연결 실패: ${WS_URL}`);
       setCameraError("서버 연결 오류");
       setNavState("idle");
       setWsConnected(false);
     };
 
-    ws.onclose = () => {
+    ws.onclose = (event) => {
+      if (event.code !== 1000) {
+        console.warn(`[WS] 연결 종료: ${WS_URL} code=${event.code}`);
+      }
       clearInterval(intervalRef.current);
       stopFrameCache();
       setWsConnected(false);
