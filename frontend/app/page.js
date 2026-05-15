@@ -321,6 +321,8 @@ export default function HomePage() {
   const message = MESSAGE[messageType] || MESSAGE.monitoring;
 
   const startCamera = useCallback(async () => {
+    // 이미 카메라 스트림이 활성화돼 있으면 중복 실행 방지
+    if (videoRef.current?.srcObject) return;
     setCameraError(null);
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -332,7 +334,7 @@ export default function HomePage() {
       });
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
-        await videoRef.current.play();
+        await videoRef.current.play().catch(() => {});
       }
     } catch (e) {
       setCameraError(`카메라 오류: ${e.message}`);
