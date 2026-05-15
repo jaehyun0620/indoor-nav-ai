@@ -402,6 +402,20 @@ export default function HomePage() {
   const handleMessage = useCallback((data) => {
     const { message_type, tts_text, query_response } = data;
     setDecision(data);
+    if (data.debug) {
+      const parts = [
+        `서버 응답: ${message_type}`,
+        `stage=${data.debug.stage || "-"}`,
+        `visible=${String(data.debug.goal_visible ?? "-")}`,
+        `dir=${data.debug.goal_direction || data.direction || "-"}`,
+        `conf=${data.debug.confidence ?? "-"}`,
+      ];
+      if (data.debug.error) parts.push(`error=${data.debug.error}`);
+      if (data.debug.reasoning) parts.push(`reason=${String(data.debug.reasoning).slice(0, 120)}`);
+      setDebugInfo(parts.join(" | "));
+    } else {
+      setDebugInfo(`서버 응답: ${message_type || "unknown"}`);
+    }
 
     if (message_type === "arrived") {
       stopTTS();
@@ -496,7 +510,6 @@ export default function HomePage() {
     ws.onmessage = (e) => {
       try {
         const parsed = JSON.parse(e.data);
-        setDebugInfo(`서버 응답: ${parsed.message_type || "unknown"}`);
         handleMessage(parsed);
       } catch {
         setDebugInfo("서버 응답 파싱 실패");

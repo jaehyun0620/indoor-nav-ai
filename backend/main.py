@@ -245,6 +245,15 @@ async def ws_navigate(websocket: WebSocket):
                             "tts_text":      tts_q,
                             "direction":     "unknown",
                             "query_response": True,
+                            "debug": {
+                                "stage": "query_obstacle",
+                                "yolo_context": yolo_ctx,
+                                "obstacle": {
+                                    "class": cls_q,
+                                    "distance_m": dist_q,
+                                    "direction": fast_result.get("direction", "unknown"),
+                                },
+                            },
                         })
                         continue
 
@@ -252,23 +261,42 @@ async def ws_navigate(websocket: WebSocket):
                         _resize_for_vlm(image_bytes), yolo_ctx, target
                     )
                     direction = slow_res.get("confirmed_direction", "unknown")
+                    raw       = slow_res.get("raw", {})
                     session.update_direction(direction)
-                    mtype     = "guidance" if slow_res.get("raw", {}).get("goal_visible") else "searching"
-                    log.info(f"[QUERY] dir={direction} | {slow_res['tts_text']!r}")
+                    mtype     = "guidance" if raw.get("goal_visible") else "searching"
+                    log.info(
+                        f"[QUERY] visible={raw.get('goal_visible')} dir={direction} "
+                        f"conf={raw.get('confidence')} dist={raw.get('goal_distance')} | "
+                        f"{slow_res['tts_text']!r}"
+                    )
                     await safe_send({
                         "message_type":   mtype,
                         "tts_text":       slow_res["tts_text"],
                         "direction":      direction,
                         "query_response": True,
+                        "debug": {
+                            "stage": "query_vlm",
+                            "yolo_context": yolo_ctx,
+                            "goal_visible": raw.get("goal_visible", False),
+                            "goal_direction": raw.get("goal_direction", "unknown"),
+                            "goal_distance": raw.get("goal_distance", "unknown"),
+                            "confidence": raw.get("confidence", 0.0),
+                            "reasoning": raw.get("reasoning", ""),
+                            "tts_message": raw.get("tts_message", ""),
+                        },
                     })
 
                 except Exception as e:
-                    log.error(f"[QUERY] 오류: {e}")
+                    log.error(f"[QUERY] 오류: {e}", exc_info=True)
                     await safe_send({
                         "message_type":   "searching",
                         "tts_text":       "방향을 파악하지 못했습니다.",
                         "direction":      "unknown",
                         "query_response": True,
+                        "debug": {
+                            "stage": "query_error",
+                            "error": str(e),
+                        },
                     })
                 continue
 
