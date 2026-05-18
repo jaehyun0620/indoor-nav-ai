@@ -167,6 +167,32 @@ def inverse_depth_to_meters(
     return round(float(depth_m), 2)
 
 
+def estimate_distance_from_bbox(
+    bbox: List[float],
+    frame_shape: Tuple[int, int],
+) -> float:
+    """
+    배포용 YOLO-only 모드에서 사용하는 간단한 거리 근사.
+
+    Depth Anything이 Railway CPU 환경에서 불안정할 때도 장애물 경고를
+    대략 유지하기 위한 fallback이다. 정확한 미터 추정이 아니라
+    가까움/중간/멀리 구분을 목적으로 한다.
+    """
+    h, _ = frame_shape
+    x1, y1, x2, y2 = bbox
+    box_h_ratio = max(0.0, (y2 - y1) / max(h, 1))
+
+    if box_h_ratio >= 0.60:
+        return 1.0
+    if box_h_ratio >= 0.35:
+        return 1.6
+    if box_h_ratio >= 0.22:
+        return 2.4
+    if box_h_ratio >= 0.12:
+        return 3.5
+    return 5.0
+
+
 # ── YOLOMiDaSWrapper ────────────────────────────────────────────────────────
 
 class YOLOMiDaSWrapper:
@@ -210,17 +236,22 @@ class YOLOMiDaSWrapper:
         self.model = _YOLO(yolo_model)
 
         # ── 기본 모델: person / chair 등 COCO 일반 장애물 전용 ───────────────
-        # 커스텀 파인튜닝으로 사람 감지 능력이 없어진 것을 보완
+        # 커스텀 파인튜닝으로 사람 감지 능력이 없어진 것을 보완.
+        # 메인 모델과 같은 경로면 중복 탐지를 막기 위해 추가 로드하지 않는다.
         base_model_path = os.getenv("YOLO_BASE_MODEL", "yolov8n.pt")
-        try:
-            self.base_model = _YOLO(base_model_path)
-        except Exception:
+        if base_model_path == yolo_model:
             self.base_model = None
+        else:
+            try:
+                self.base_model = _YOLO(base_model_path)
+            except Exception:
+                self.base_model = None
 
         self.conf_threshold = conf_threshold
         self.scale_factor = scale_factor
         self.model_size = midas_model
         self.depth_interval = int(os.getenv("DA2_DEPTH_INTERVAL", str(depth_interval)))
+        self.fast_mode = os.getenv("FAST_MODE", "full").lower()
 
         # 커스텀 모델이 탐지할 클래스 (파인튜닝한 것)
         self.custom_classes = {"elevator", "stairs", "stair"}
@@ -269,14 +300,16 @@ class YOLOMiDaSWrapper:
         """
         from backend.modules.context_builder import build_obstacle_summary
 
-        # 1) DA2 깊이맵 — depth_interval 프레임마다 갱신, 나머지는 캐시 재사용
-        # 카운터를 증가 전에 체크해야 depth_interval=2 시 프레임 1,3,5... 에서 실행됨
-        # (증가 후 체크하면 첫 프레임(count=1)과 두 번째 프레임(count=2)이 연속 실행되는 off-by-one 발생)
-        if self._depth_cache is None or self._frame_count % self.depth_interval == 0:
-            self._depth_cache = estimate_depth_map(frame_bgr)
-        self._frame_count += 1
+        use_depth = self.fast_mode == "full"
+        depth_map = None
 
-        depth_map = self._depth_cache
+        # 1) full 모드: DA2 깊이맵 — depth_interval 프레임마다 갱신, 나머지는 캐시 재사용
+        #    yolo_only 모드: Railway 배포용으로 DA2를 건너뛰고 bbox 기반 거리 근사 사용
+        if use_depth:
+            if self._depth_cache is None or self._frame_count % self.depth_interval == 0:
+                self._depth_cache = estimate_depth_map(frame_bgr)
+            depth_map = self._depth_cache
+            self._frame_count += 1
 
         # 2) YOLO 탐지 (매 프레임 실행)
         frame_area = frame_bgr.shape[0] * frame_bgr.shape[1]
@@ -304,7 +337,10 @@ class YOLOMiDaSWrapper:
                     if bbox_area / frame_area < self.min_bbox_area_ratio:
                         continue
 
-                    distance_m = bbox_center_depth(depth_map, bbox)
+                    if use_depth and depth_map is not None:
+                        distance_m = bbox_center_depth(depth_map, bbox)
+                    else:
+                        distance_m = estimate_distance_from_bbox(bbox, frame_bgr.shape[:2])
                     found.append({"class": cls_name, "bbox": bbox,
                                   "distance_m": distance_m, "conf": conf})
             return found

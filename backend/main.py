@@ -432,4 +432,5 @@ async def health():
         "status": "ok",
         "fast_channel": fast_channel is not None,
         "slow_channel": slow_channel is not None,
+        "fast_mode": os.getenv("FAST_MODE", "full"),
     }

@@ -2,6 +2,10 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
+# Railway 배포 기본값: torch/transformers depth 추론을 피하고 YOLO-only로 실행.
+# 로컬 또는 별도 배포에서 Depth Anything을 다시 쓰려면 FAST_MODE=full 로 오버라이드.
+ENV FAST_MODE=yolo_only
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libglib2.0-0 \
     libgl1 \
