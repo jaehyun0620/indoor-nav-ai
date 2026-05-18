@@ -117,6 +117,24 @@ def _resize_for_vlm(image_bytes: bytes) -> bytes:
     return enc.tobytes()
 
 
+def _empty_fast_output(error: str = "") -> dict:
+    """FastChannel 추론 실패 시 VLM query를 계속 진행하기 위한 안전 fallback."""
+    return {
+        "fast_result": {
+            "class": "",
+            "distance_m": 999.0,
+            "direction": "unknown",
+            "has_obstacle": False,
+            "conf": 0.0,
+            "bbox": [0, 0, 0, 0],
+            "detections": [],
+        },
+        "yolo_context": "탐지된 객체 없음",
+        "detections": [],
+        "fast_error": error,
+    }
+
+
 # ── WebSocket ─────────────────────────────────────────────────────────────────
 
 @app.websocket("/ws/navigate")
@@ -224,9 +242,17 @@ async def ws_navigate(websocket: WebSocket):
             if action == "query":
                 log.info(f"[QUERY] target={target!r} 방향 조회 시작")
                 try:
-                    fast_out    = await asyncio.to_thread(fast_channel.process_bytes, image_bytes)
+                    try:
+                        if fast_channel is None:
+                            raise RuntimeError("FastChannel not loaded")
+                        fast_out = await asyncio.to_thread(fast_channel.process_bytes, image_bytes)
+                    except Exception as e:
+                        log.error(f"[QUERY→FAST] 빠른 채널 실패, VLM만 진행: {e}", exc_info=True)
+                        fast_out = _empty_fast_output(str(e))
+
                     fast_result = fast_out["fast_result"]
                     yolo_ctx    = fast_out["yolo_context"]
+                    fast_error  = fast_out.get("fast_error", "")
 
                     # 쿼리 중에도 가까운 장애물이 있으면 장애물 경고 우선
                     if fast_result["has_obstacle"]:
@@ -248,6 +274,7 @@ async def ws_navigate(websocket: WebSocket):
                             "debug": {
                                 "stage": "query_obstacle",
                                 "yolo_context": yolo_ctx,
+                                "fast_error": fast_error,
                                 "obstacle": {
                                     "class": cls_q,
                                     "distance_m": dist_q,
@@ -277,6 +304,7 @@ async def ws_navigate(websocket: WebSocket):
                         "debug": {
                             "stage": "query_vlm",
                             "yolo_context": yolo_ctx,
+                            "fast_error": fast_error,
                             "goal_visible": raw.get("goal_visible", False),
                             "goal_direction": raw.get("goal_direction", "unknown"),
                             "goal_distance": raw.get("goal_distance", "unknown"),
@@ -307,11 +335,13 @@ async def ws_navigate(websocket: WebSocket):
             # YOLO + DA2 빠른 채널 — 장애물 감시
             # ════════════════════════════════════════════════════════════
             try:
+                if fast_channel is None:
+                    raise RuntimeError("FastChannel not loaded")
                 fast_out    = await asyncio.to_thread(fast_channel.process_bytes, image_bytes)
                 fast_result = fast_out["fast_result"]
                 yolo_ctx    = fast_out["yolo_context"]
             except Exception as e:
-                log.error(f"[FAST] 오류: {e}")
+                log.error(f"[FAST] 오류: {e}", exc_info=True)
                 continue
 
             now  = time.time()
