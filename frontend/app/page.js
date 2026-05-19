@@ -9,7 +9,8 @@ const API_BASE = (
 ).replace(/\/+$/, "");
 const WS_URL = API_BASE.replace(/^http/, "ws") + "/ws/navigate";
 
-const CAPTURE_INTERVAL_MS = 200;
+const CAPTURE_INTERVAL_MS = 500;
+const MAX_WS_BUFFERED_BYTES = 512 * 1024;
 
 const PRESET_TARGETS = ["화장실", "강의실", "엘리베이터"];
 
@@ -365,7 +366,7 @@ export default function HomePage() {
     if (!video || !canvas) return;
 
     const capture = () => {
-      if (video.readyState >= 2) {
+      if (video.readyState >= 2 && video.videoWidth > 0 && video.videoHeight > 0) {
         canvas.width = video.videoWidth || 640;
         canvas.height = video.videoHeight || 480;
         canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
@@ -386,6 +387,19 @@ export default function HomePage() {
       };
       rvcHandleRef.current = requestAnimationFrame(loop);
     }
+  }, []);
+
+  const captureCurrentFrame = useCallback(() => {
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    if (!video || !canvas) return false;
+    if (video.readyState < 2 || video.videoWidth <= 0 || video.videoHeight <= 0) return false;
+
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
+    frameReadyRef.current = true;
+    return true;
   }, []);
 
   const stopFrameCache = useCallback(() => {
@@ -496,10 +510,15 @@ export default function HomePage() {
       setNavState("navigating");
       setWsConnected(true);
       setDecision(null);
+      setIsQuerying(false);
       lastSpokenRef.current = { text: "", type: "", at: 0 };
       startFrameCache();
       intervalRef.current = setInterval(() => {
-        if (ws.readyState === WebSocket.OPEN && frameReadyRef.current) {
+        if (
+          ws.readyState === WebSocket.OPEN &&
+          frameReadyRef.current &&
+          ws.bufferedAmount < MAX_WS_BUFFERED_BYTES
+        ) {
           canvasRef.current?.toBlob((blob) => {
             if (blob && ws.readyState === WebSocket.OPEN) ws.send(blob);
           }, "image/jpeg", 0.8);
@@ -531,6 +550,7 @@ export default function HomePage() {
       setDebugInfo(`WebSocket 종료: code=${event.code}`);
       clearInterval(intervalRef.current);
       stopFrameCache();
+      setIsQuerying(false);
       setWsConnected(false);
     };
   }, [target, startCamera, startFrameCache, stopFrameCache, handleMessage]);
@@ -578,7 +598,7 @@ export default function HomePage() {
       speak(message, false);
       return;
     }
-    if (!frameReadyRef.current) {
+    if (!captureCurrentFrame() && !frameReadyRef.current) {
       const message = "카메라 화면이 아직 준비되지 않았습니다. 잠시 후 다시 눌러주세요.";
       setCameraError(message);
       setDebugInfo("query 실패: frameReady=false");
@@ -599,7 +619,7 @@ export default function HomePage() {
     setCameraError(null);
     setDebugInfo("query 전송 완료");
     speak("분석 중입니다", false);
-  }, [target, speak, isQuerying]);
+  }, [target, speak, isQuerying, captureCurrentFrame]);
 
   useEffect(() => () => {
     clearInterval(intervalRef.current);
