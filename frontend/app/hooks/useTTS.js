@@ -69,11 +69,19 @@ export function useTTS() {
     }
   }, []);
 
+  /** 브라우저 내장 Web Speech 중단 */
+  const _stopNative = useCallback(() => {
+    if (typeof window !== "undefined" && window.speechSynthesis) {
+      window.speechSynthesis.cancel();
+    }
+  }, []);
+
   /**
    * Blob → Audio 재생.
    * 재생이 끝나면 pendingRef에 대기 중인 메시지를 자동으로 재생한다.
    */
   const _playBlob = useCallback((blob) => {
+    _stopNative();
     _stopAudio();
     const url   = URL.createObjectURL(blob);
     const audio = new Audio(url);
@@ -91,7 +99,7 @@ export function useTTS() {
     };
     audio.onerror = () => { _setIsSpeaking(false); };
     audio.play().catch(() => _setIsSpeaking(false));
-  }, [_stopAudio, _setIsSpeaking]);
+  }, [_stopAudio, _stopNative, _setIsSpeaking]);
 
   /** Naver Clova Voice — 백엔드 프록시 경유 */
   const _speakNaver = useCallback(async (text, signal) => {
@@ -129,6 +137,7 @@ export function useTTS() {
   const _speakNative = useCallback((text) => {
     const synth = window.speechSynthesis;
     if (!synth) return;
+    _stopAudio();
     synth.cancel();
 
     const utter    = new SpeechSynthesisUtterance(text);
@@ -155,7 +164,7 @@ export function useTTS() {
     };
     utter.onerror  = () => _setIsSpeaking(false);
     synth.speak(utter);
-  }, [_setIsSpeaking]);
+  }, [_stopAudio, _setIsSpeaking]);
 
   /**
    * speak(text, urgent = false)
@@ -178,7 +187,7 @@ export function useTTS() {
         abortRef.current = null;
       }
       _stopAudio();
-      if (window.speechSynthesis) window.speechSynthesis.cancel();
+      _stopNative();
       _setIsSpeaking(false);
     }
 
@@ -195,7 +204,7 @@ export function useTTS() {
       fetchingRef.current = false;
       abortRef.current = null;
     }
-  }, [_isDuplicate, _speakNaver, _speakNative, _stopAudio, _setIsSpeaking]);
+  }, [_isDuplicate, _speakNaver, _speakNative, _stopAudio, _stopNative, _setIsSpeaking]);
 
   // speak 최신 참조 유지 (onended 콜백에서 참조)
   useEffect(() => {
@@ -213,9 +222,9 @@ export function useTTS() {
         audioRef.current.onerror = null;
         audioRef.current.pause();
       }
-      if (window.speechSynthesis) window.speechSynthesis.cancel();
+      _stopNative();
     };
-  }, []);
+  }, [_stopNative]);
 
   const stop = useCallback(() => {
     pendingRef.current = null;
@@ -223,11 +232,11 @@ export function useTTS() {
       abortRef.current.abort();
       abortRef.current = null;
     }
-    if (window.speechSynthesis) window.speechSynthesis.cancel();
+    _stopNative();
     _stopAudio();
     _setIsSpeaking(false);
     fetchingRef.current = false;
-  }, [_stopAudio, _setIsSpeaking]);
+  }, [_stopAudio, _stopNative, _setIsSpeaking]);
 
   const clearPending = useCallback(() => {
     pendingRef.current = null;
