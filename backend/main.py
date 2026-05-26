@@ -156,6 +156,7 @@ async def ws_navigate(websocket: WebSocket):
     is_running        : bool  = False
     last_warn_time    : float = 0.0
     last_obstacle_cls : str   = ""
+    orientation_done  : bool  = False   # 세션당 최초 1회만 실행
     session = NavigationSession()
 
     # WebSocket 동시 쓰기 방지 락
@@ -200,16 +201,13 @@ async def ws_navigate(websocket: WebSocket):
                 session.start(target)
                 last_warn_time    = 0.0
                 last_obstacle_cls = ""
+                orientation_done  = False
                 is_running        = True
 
                 log.info(f"[SESSION] 시작 | target={target}")
                 await safe_send({
                     "message_type": "monitoring",
-                    "tts_text": (
-                        f"{target} 안내를 시작합니다. "
-                        "장애물 감시 중입니다. "
-                        "방향이 궁금하면 방향 조회 버튼을 눌러주세요."
-                    ),
+                    "tts_text": f"{target} 안내를 시작합니다. 주변 장면을 파악하고 있어요.",
                     "direction": "unknown",
                 })
                 continue
@@ -343,6 +341,39 @@ async def ws_navigate(websocket: WebSocket):
             except Exception as e:
                 log.error(f"[FAST] 오류: {e}", exc_info=True)
                 continue
+
+            # ── 첫 프레임 초기 장면 파악 (orientation) ──────────────────
+            if not orientation_done:
+                orientation_done = True
+                log.info(f"[ORIENTATION] 첫 프레임 장면 파악 시작 | target={target!r}")
+
+                async def _run_orientation(img: bytes, ctx: str, tgt: str) -> None:
+                    try:
+                        ori = await slow_channel.run_orientation(
+                            _resize_for_vlm(img), ctx, tgt
+                        )
+                        log.info(
+                            f"[ORIENTATION] visible={ori['goal_visible']} "
+                            f"dir={ori['goal_direction']} scene={ori['scene_type']!r} | "
+                            f"{ori['tts_text']!r}"
+                        )
+                        await safe_send({
+                            "message_type": "orientation",
+                            "tts_text":     ori["tts_text"],
+                            "direction":    ori["goal_direction"],
+                            "scene_type":   ori["scene_type"],
+                            "goal_visible": ori["goal_visible"],
+                            "debug": {
+                                "stage": "orientation",
+                                "yolo_context": ctx,
+                                "reasoning": ori["raw"].get("reasoning", ""),
+                                "confidence": ori["raw"].get("confidence", 0.0),
+                            },
+                        })
+                    except Exception as e:
+                        log.error(f"[ORIENTATION] 오류: {e}", exc_info=True)
+
+                asyncio.create_task(_run_orientation(image_bytes, yolo_ctx, target))
 
             now  = time.time()
             dist = fast_result["distance_m"]

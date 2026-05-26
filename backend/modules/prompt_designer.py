@@ -86,6 +86,52 @@ reasoning을 먼저 작성하고, tts_message는 그 reasoning을 구어체로 �
 3. YOLO 참고 정보와 이미지가 다르면 → 이미지를 따름\
 """
 
+# ── 초기 장면 파악 (Orientation) 프롬프트 ────────────────────────────────────
+ORIENTATION_PROMPT_TEMPLATE = """\
+당신은 시각장애인의 눈이 되어주는 실내 길 안내 도우미입니다.
+사용자가 방금 앱을 켰습니다. 카메라에 비치는 현재 장면을 파악해서
+사용자가 어떤 환경에 있고 목적지가 보이는지 알려주세요.
+
+━━━ 센서 보조 정보 (참고용) ━━━
+{yolo_context}
+
+━━━ 목표물 ━━━
+{target}
+
+━━━ 이미지 분석 체크리스트 ━━━
+① 현재 공간 유형 (복도, 로비, 계단, 엘리베이터홀 등)
+② 목표물 또는 목표물 방향 표지판이 보이는지
+③ 주변 구조 (직선 복도, 꺾임, 갈림길, 계단 등)
+④ 눈에 띄는 랜드마크 (소화기, 게시판, 창문, 기둥 등)
+
+반드시 아래 JSON 형식으로만 응답하세요. 다른 텍스트는 절대 포함하지 마세요.
+
+{{
+  "goal_visible": true 또는 false,
+  "goal_direction": "left" 또는 "right" 또는 "straight" 또는 "unknown",
+  "scene_type": "현재 공간 유형 한 단어 (예: 복도, 로비, 계단실)",
+  "confidence": 0.0에서 1.0 사이 숫자,
+  "reasoning": "이미지에서 직접 확인한 내용 구체적으로 서술",
+  "tts_message": "친근한 구어체 2~3문장 안내 (아래 규칙 참조)"
+}}
+
+━━━ tts_message 작성 규칙 ━━━
+
+[목표물이 보이는 경우 (goal_visible=true)]
+  첫 문장 = 목표물이 어디에 어떻게 보이는지
+  둘째 문장 = 이동 방향 안내
+  예: "오른쪽 벽에 화장실 표지판이 보여요. 오른쪽으로 이동하시면 됩니다."
+
+[목표물이 안 보이는 경우 (goal_visible=false)]
+  첫 문장 = 현재 어떤 환경에 있는지
+  둘째 문장 = 어느 방향으로 이동해보면 좋을지 제안
+  예: "지금 건물 복도에 계신 것 같아요. 앞쪽으로 계속 이동해보세요."
+  예: "현재 로비처럼 보여요. 왼쪽 복도로 들어가서 표지판을 확인해보세요."
+
+[어투] 친근하고 자연스러운 구어체, 80자 이내, 로봇 말투 금지\
+"""
+
+
 # 비교 실험 Baseline용 프롬프트 (구조화 없음)
 BASELINE_PROMPT_TEMPLATE = """\
 이미지를 보고 {target}이(가) 어느 방향에 있는지 알려주세요.\
@@ -112,6 +158,29 @@ STRUCTURED_ONLY_PROMPT_TEMPLATE = """\
 1. confidence가 0.6 미만이면 goal_direction은 반드시 "unknown"으로 설정하세요.
 4. goal_visible이 false이면 goal_direction은 "unknown"으로 설정하세요.\
 """
+
+
+def build_orientation_prompt(yolo_context: str, target: str) -> str:
+    """
+    네비게이션 시작 직후 첫 프레임을 분석하는 초기 장면 파악 프롬프트를 생성한다.
+
+    Parameters
+    ----------
+    yolo_context : str
+        context_builder.build_context() 결과
+    target : str
+        사용자가 요청한 목표물 (예: "화장실")
+
+    Returns
+    -------
+    str
+        완성된 orientation 프롬프트 문자열
+    """
+    target_desc = TARGET_KO_TO_DESC.get(target, target)
+    return ORIENTATION_PROMPT_TEMPLATE.format(
+        yolo_context=yolo_context,
+        target=target_desc,
+    )
 
 
 def build_prompt(

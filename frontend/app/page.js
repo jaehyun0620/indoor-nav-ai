@@ -26,6 +26,7 @@ const MESSAGE = {
   caution: { label: "주의", color: "#f59e0b", bg: "#261a07" },
   guidance: { label: "안내", color: "#22c55e", bg: "#071f12" },
   searching: { label: "탐색", color: "#3b82f6", bg: "#071629" },
+  orientation: { label: "파악 중", color: "#38bdf8", bg: "#071a26" },
   monitoring: { label: "감시", color: "#94a3b8", bg: "#0b1220" },
   arrived: { label: "도착", color: "#a855f7", bg: "#160d24" },
   stopped: { label: "중지", color: "#94a3b8", bg: "#0b1220" },
@@ -482,6 +483,13 @@ export default function HomePage() {
     }
 
     if (message_type === "monitoring") {
+      speak(tts_text, false);
+      lastSpokenRef.current = { text: tts_text, type: message_type, at: now };
+      return;
+    }
+
+    // 초기 장면 파악 — 세션 시작 직후 한 번 발화
+    if (message_type === "orientation") {
       speak(tts_text, false);
       lastSpokenRef.current = { text: tts_text, type: message_type, at: now };
       return;

@@ -16,7 +16,7 @@ from typing import Dict, Optional
 
 import httpx
 
-from backend.modules.prompt_designer import build_prompt, parse_vlm_response
+from backend.modules.prompt_designer import build_prompt, build_orientation_prompt, parse_vlm_response
 from backend.modules.consistency_filter import ConsistencyFilter
 
 
@@ -334,6 +334,86 @@ class SlowChannel:
             "tts_text": tts_text,
             "unknown_streak": self.filter.unknown_streak,
             "raw": parsed,
+        }
+
+    async def run_orientation(
+        self,
+        image_bytes: bytes,
+        yolo_context: str,
+        target: str,
+    ) -> Dict:
+        """
+        네비게이션 시작 직후 첫 프레임에 대해 초기 장면 파악(orientation)을 수행한다.
+        ConsistencyFilter를 거치지 않고 VLM 1회 응답을 즉시 반환한다.
+
+        Parameters
+        ----------
+        image_bytes : bytes
+            첫 번째 카메라 프레임 JPEG 바이트
+        yolo_context : str
+            context_builder.build_context() 결과
+        target : str
+            목표물 (예: "화장실")
+
+        Returns
+        -------
+        dict
+            {
+                "goal_visible": bool,
+                "goal_direction": str,
+                "scene_type": str,
+                "tts_text": str,
+                "raw": dict
+            }
+        """
+        prompt = build_orientation_prompt(yolo_context, target)
+
+        try:
+            raw_text = await self.vlm.call(prompt, image_bytes)
+        except Exception as e:
+            return {
+                "goal_visible": False,
+                "goal_direction": "unknown",
+                "scene_type": "unknown",
+                "tts_text": f"{target} 안내를 시작합니다. 카메라를 복도 방향으로 향해주세요.",
+                "raw": {"error": str(e)},
+            }
+
+        parsed = parse_vlm_response(raw_text)
+
+        # orientation 전용 필드 추출
+        scene_type = ""
+        try:
+            import json, re
+            cleaned = re.sub(r"```(?:json)?\s*|\s*```", "", raw_text).strip()
+            jm = re.search(r"\{[\s\S]*\}", cleaned)
+            if jm:
+                full = json.loads(jm.group())
+                scene_type = str(full.get("scene_type", ""))
+        except Exception:
+            pass
+
+        tts_message = parsed.get("tts_message", "").strip()
+        if not tts_message:
+            # fallback: 간단한 안내문 생성
+            if parsed.get("goal_visible"):
+                dir_map = {"left": "왼쪽", "right": "오른쪽", "straight": "앞쪽"}
+                d = dir_map.get(parsed.get("goal_direction", ""), "")
+                tts_message = (
+                    f"{target}이 보입니다. {d}으로 이동하세요." if d
+                    else f"{target}이 가까이 있습니다."
+                )
+            else:
+                tts_message = (
+                    f"{target}을 찾고 있습니다. 카메라를 천천히 움직여주세요."
+                )
+
+        return {
+            "goal_visible":   parsed.get("goal_visible", False),
+            "goal_direction": parsed.get("goal_direction", "unknown"),
+            "scene_type":     scene_type,
+            "tts_text":       tts_message,
+            "raw":            parsed,
         }
 
     def reset(self) -> None:
