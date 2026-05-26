@@ -384,33 +384,58 @@ class SlowChannel:
         # orientation 전용 필드 추출
         scene_type = ""
         try:
-            import json, re
-            cleaned = re.sub(r"```(?:json)?\s*|\s*```", "", raw_text).strip()
-            jm = re.search(r"\{[\s\S]*\}", cleaned)
+            import json, re as _re
+            cleaned = _re.sub(r"```(?:json)?\s*|\s*```", "", raw_text).strip()
+            jm = _re.search(r"\{[\s\S]*\}", cleaned)
             if jm:
                 full = json.loads(jm.group())
                 scene_type = str(full.get("scene_type", ""))
         except Exception:
             pass
 
+        # ── 할루시네이션 후처리 가드 ────────────────────────────────────
+        # reasoning에 추정·불확실 표현이 있으면 goal_visible을 False로 강제.
+        # 프롬프트 규칙만으로는 LLM이 무시하는 경우가 있으므로 코드 레벨에서 이중 보호.
+        GUESS_KEYWORDS = [
+            "예상", "추정", "것으로 보임", "있을 것",
+            "위치할 것", "보일 것", "될 것으로", "일 것이다",
+            "있을 수도", "가능성", "것 같습니다", "듯합니다",
+        ]
+        reasoning_text = parsed.get("reasoning", "")
+        if parsed.get("goal_visible") and any(kw in reasoning_text for kw in GUESS_KEYWORDS):
+            parsed["goal_visible"] = False
+            parsed["goal_direction"] = "unknown"
+
+        # goal_visible이 후처리로 바뀐 경우 tts_message도 재생성
+        goal_visible  = parsed.get("goal_visible", False)
+        goal_direction = parsed.get("goal_direction", "unknown")
+
         tts_message = parsed.get("tts_message", "").strip()
+        # goal_visible이 False로 바뀐 경우 기존 tts_message는 잘못된 내용일 수 있으므로 무효화
+        if not goal_visible and tts_message and any(
+            word in tts_message for word in ["보여요", "있어요", "확인됩니다"]
+        ):
+            tts_message = ""
+
         if not tts_message:
             # fallback: 간단한 안내문 생성
-            if parsed.get("goal_visible"):
+            if goal_visible:
                 dir_map = {"left": "왼쪽", "right": "오른쪽", "straight": "앞쪽"}
-                d = dir_map.get(parsed.get("goal_direction", ""), "")
+                d = dir_map.get(goal_direction, "")
                 tts_message = (
                     f"{target}이 보입니다. {d}으로 이동하세요." if d
                     else f"{target}이 가까이 있습니다."
                 )
             else:
+                sc = f" {scene_type}에" if scene_type and scene_type != "unknown" else ""
                 tts_message = (
-                    f"{target}을 찾고 있습니다. 카메라를 천천히 움직여주세요."
+                    f"현재{sc} 계신 것 같아요. "
+                    f"{target}을 찾고 있어요. 앞쪽으로 이동해보세요."
                 )
 
         return {
-            "goal_visible":   parsed.get("goal_visible", False),
-            "goal_direction": parsed.get("goal_direction", "unknown"),
+            "goal_visible":   goal_visible,
+            "goal_direction": goal_direction,
             "scene_type":     scene_type,
             "tts_text":       tts_message,
             "raw":            parsed,

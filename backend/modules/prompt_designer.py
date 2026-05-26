@@ -125,8 +125,10 @@ goal_visible = true 로 설정하려면 아래 조건을 모두 충족해야 합
 위 조건 중 하나라도 불충족 시 goal_visible = false, goal_direction = "unknown" 으로 설정할 것.
 
 ⚠️ 특히 금지 사항:
-  - 목표물이 "있을 것 같다" "추정된다" "예상된다"는 이유로 goal_visible = true 설정 금지
+  - 목표물이 "있을 것 같다" "추정된다" "예상된다" "위치할 것이다"는 이유로 goal_visible = true 설정 금지
   - 목표물과 무관한 문·벽·복도 구조만 보이는 경우 goal_visible = false
+  - 목표물과 다른 사물(일반 문, 세미나실 유리문 등)을 목표물로 혼동 금지
+  - reasoning에 "예상", "추정", "것으로 보임", "있을 것" 같은 불확실 표현이 포함된 경우 goal_visible = false
   - confidence < 0.7이면 goal_direction 반드시 "unknown"
 
 ━━━ tts_message 작성 규칙 ━━━
