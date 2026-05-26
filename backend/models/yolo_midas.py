@@ -251,7 +251,7 @@ class YOLOMiDaSWrapper:
         self.scale_factor = scale_factor
         self.model_size = midas_model
         self.depth_interval = int(os.getenv("DA2_DEPTH_INTERVAL", str(depth_interval)))
-        self.fast_mode = os.getenv("FAST_MODE", "full").lower()
+        self.fast_mode = os.getenv("FAST_MODE", "yolo_only").lower()
 
         # 커스텀 모델이 탐지할 클래스 (파인튜닝한 것)
         self.custom_classes = {"elevator", "stairs", "stair"}
