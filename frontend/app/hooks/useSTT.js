@@ -17,7 +17,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
  * }}
  */
 export function useSTT() {
-  const recognitionRef = useRef(null);
+  const recognitionRef  = useRef(null);
+  const isListeningRef  = useRef(false);  // state 대신 ref — stale closure 방지
   const [transcript, setTranscript] = useState("");
   const [interimText, setInterimText] = useState("");
   const [isListening, setIsListening] = useState(false);
@@ -42,18 +43,24 @@ export function useSTT() {
 
     recognition.onstart = () => {
       if (!mounted) return;
+      isListeningRef.current = true;
       setIsListening(true);
       setError(null);
     };
 
     recognition.onend = () => {
       if (!mounted) return;
+      isListeningRef.current = false;
       setIsListening(false);
     };
 
     recognition.onerror = (e) => {
       if (!mounted) return;
-      setError(`음성 인식 오류: ${e.error}`);
+      // 'aborted'는 의도적인 중지이므로 오류 표시 안 함
+      if (e.error !== "aborted") {
+        setError(`음성 인식 오류: ${e.error}`);
+      }
+      isListeningRef.current = false;
       setIsListening(false);
     };
 
@@ -88,16 +95,22 @@ export function useSTT() {
   }, []);
 
   const start = useCallback(() => {
-    if (!recognitionRef.current || isListening) return;
+    if (!recognitionRef.current || isListeningRef.current) return;
     setTranscript("");
     setInterimText("");
-    recognitionRef.current.start();
-  }, [isListening]);
+    setError(null);
+    try {
+      recognitionRef.current.start();
+    } catch (e) {
+      // 이미 started 상태 등 예외 — 무시
+      console.warn("[STT] start() 예외:", e.message);
+    }
+  }, []);  // ref 기반 → 의존성 없음, 항상 최신
 
   const stop = useCallback(() => {
-    if (!recognitionRef.current || !isListening) return;
+    if (!recognitionRef.current || !isListeningRef.current) return;
     recognitionRef.current.stop();
-  }, [isListening]);
+  }, []);  // ref 기반 → 의존성 없음
 
   const reset = useCallback(() => {
     setTranscript("");

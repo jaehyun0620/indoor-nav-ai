@@ -320,9 +320,14 @@ export default function HomePage() {
 
   const { transcript, isListening, start: startSTT, stop: stopSTT, reset: resetSTT } = useSTT();
   const { speak, stop: stopTTS, clearPending, unlockAudio, isSpeaking } = useTTS();
+  const isSpeakingRef = useRef(false);  // TTS 재생 상태 ref (STT 시작 타이밍 판단용)
+  const sttTimerRef   = useRef(null);   // STT 대기 타이머
 
   const isRunning = navState === "navigating";
   const direction = DIRECTION[decision?.direction] || DIRECTION.unknown;
+
+  // isSpeaking → ref 미러 (setTimeout 클로저에서 최신 값 참조용)
+  useEffect(() => { isSpeakingRef.current = isSpeaking; }, [isSpeaking]);
   const messageType = decision?.message_type || (isRunning ? "monitoring" : "ready");
   const message = MESSAGE[messageType] || MESSAGE.monitoring;
 
@@ -563,7 +568,7 @@ export default function HomePage() {
     };
   }, [target, startCamera, startFrameCache, stopFrameCache, handleMessage]);
 
-  // STT 인식 완료 → 목적지 설정 + 즉시 안내 시작
+  // STT 인식 완료 → 목적지 설정 + TTS 재생 완료 후 안내 시작
   // (startNavigation 정의 이후에 위치해야 const TDZ 오류가 발생하지 않음)
   useEffect(() => {
     if (!transcript || navState !== "idle") return;
@@ -574,7 +579,16 @@ export default function HomePage() {
       setTarget(cleaned);
       speak(`${cleaned} 안내를 시작합니다`);
       resetSTT();
-      setTimeout(() => startNavigation(cleaned), 1400);
+      // TTS "○○ 안내를 시작합니다" 재생이 끝난 뒤 startNavigation 호출
+      // → 폴링으로 isSpeaking이 false가 되면 실행 (최대 4초 대기)
+      let waited = 0;
+      const poll = setInterval(() => {
+        waited += 100;
+        if (!isSpeakingRef.current || waited >= 4000) {
+          clearInterval(poll);
+          startNavigation(cleaned);
+        }
+      }, 100);
     }
   }, [transcript, navState, speak, resetSTT, startNavigation]);
 
@@ -632,6 +646,7 @@ export default function HomePage() {
   useEffect(() => () => {
     clearInterval(intervalRef.current);
     if (tapTimerRef.current) clearTimeout(tapTimerRef.current);
+    if (sttTimerRef.current) clearInterval(sttTimerRef.current);
     wsRef.current?.close();
     stopCamera();
   }, [stopCamera]);
@@ -664,7 +679,18 @@ export default function HomePage() {
         if (count === 1) {
           if (navState === "idle") {
             speak("목적지를 말씀하세요");
-            setTimeout(startSTT, 600);
+            // TTS 재생이 끝난 뒤 STT 시작 — 100ms 간격으로 폴링
+            // (TTS가 마이크에 잡히는 피드백 루프 방지)
+            if (sttTimerRef.current) clearInterval(sttTimerRef.current);
+            let waited = 0;
+            sttTimerRef.current = setInterval(() => {
+              waited += 100;
+              if (!isSpeakingRef.current || waited >= 3000) {
+                clearInterval(sttTimerRef.current);
+                sttTimerRef.current = null;
+                startSTT();
+              }
+            }, 100);
           } else if (navState === "navigating") {
             queryDirection();
           }
