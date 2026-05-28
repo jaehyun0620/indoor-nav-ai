@@ -33,11 +33,42 @@ export function useTTS() {
   const pendingRef        = useRef(null);   // 재생 끝나면 바로 재생할 대기 메시지
   const speakRef          = useRef(null);   // speak 함수의 최신 참조 (onended 콜백에서 사용)
   const duplicateTimerRef = useRef(null);   // 중복 방지 타이머 (누적 방지용)
+  const speakStartRef     = useRef(0);      // 재생 시작 timestamp (watchdog용)
+  const watchdogRef       = useRef(null);   // isSpeaking stuck 방지 watchdog 타이머
+  const audioUnlockedRef  = useRef(false);  // iOS audio context unlock 여부
 
   /** isSpeaking state + ref 동시 업데이트 */
   const _setIsSpeaking = useCallback((val) => {
     isSpeakingRef.current = val;
     setIsSpeaking(val);
+    // watchdog: true로 설정될 때 타이머 시작, false면 타이머 해제
+    if (val) {
+      speakStartRef.current = Date.now();
+      if (watchdogRef.current) clearTimeout(watchdogRef.current);
+      watchdogRef.current = setTimeout(() => {
+        // 15초 이상 isSpeaking이 true이면 강제 reset
+        // (onended/onerror 미발화 → stuck 방지)
+        if (isSpeakingRef.current) {
+          console.warn("[TTS] watchdog: isSpeaking stuck → 강제 reset");
+          isSpeakingRef.current = false;
+          setIsSpeaking(false);
+          fetchingRef.current = false;
+          // pending 메시지 있으면 재생 시도
+          const pending = pendingRef.current;
+          if (pending) {
+            pendingRef.current = null;
+            lastTextRef.current = "";
+            speakRef.current?.(pending, false);
+          }
+        }
+        watchdogRef.current = null;
+      }, 15000);
+    } else {
+      if (watchdogRef.current) {
+        clearTimeout(watchdogRef.current);
+        watchdogRef.current = null;
+      }
+    }
   }, []);
 
   /**
@@ -74,6 +105,23 @@ export function useTTS() {
     if (typeof window !== "undefined" && window.speechSynthesis) {
       window.speechSynthesis.cancel();
     }
+  }, []);
+
+  /**
+   * iOS/Android 자동재생 잠금 해제.
+   * 사용자 제스처(탭) 시점에 무음 오디오를 재생해서 브라우저 오디오 컨텍스트를 활성화한다.
+   * 이후 speak() 호출은 제스처 없이도 재생 가능.
+   */
+  const unlockAudio = useCallback(() => {
+    if (audioUnlockedRef.current) return;
+    audioUnlockedRef.current = true;
+    try {
+      const silentAudio = new Audio(
+        "data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA"
+      );
+      silentAudio.volume = 0.01;
+      silentAudio.play().catch(() => {});
+    } catch {}
   }, []);
 
   /**
@@ -215,6 +263,7 @@ export function useTTS() {
   useEffect(() => {
     return () => {
       if (duplicateTimerRef.current) clearTimeout(duplicateTimerRef.current);
+      if (watchdogRef.current) clearTimeout(watchdogRef.current);
       if (abortRef.current) abortRef.current.abort();
       if (audioRef.current) {
         audioRef.current.onplay = null;
@@ -242,5 +291,5 @@ export function useTTS() {
     pendingRef.current = null;
   }, []);
 
-  return { speak, stop, clearPending, isSpeaking, error };
+  return { speak, stop, clearPending, unlockAudio, isSpeaking, error };
 }

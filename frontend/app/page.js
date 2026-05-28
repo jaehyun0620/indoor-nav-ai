@@ -319,7 +319,7 @@ export default function HomePage() {
   const [debugInfo, setDebugInfo] = useState("초기 상태");
 
   const { transcript, isListening, start: startSTT, stop: stopSTT, reset: resetSTT } = useSTT();
-  const { speak, stop: stopTTS, clearPending, isSpeaking } = useTTS();
+  const { speak, stop: stopTTS, clearPending, unlockAudio, isSpeaking } = useTTS();
 
   const isRunning = navState === "navigating";
   const direction = DIRECTION[decision?.direction] || DIRECTION.unknown;
@@ -651,6 +651,9 @@ export default function HomePage() {
       const tag = e.target.tagName;
       if (tag === "BUTTON" || tag === "INPUT") return;
 
+      // iOS/Android 오디오 컨텍스트 unlock — 모든 탭에서 항상 호출 (멱등)
+      unlockAudio();
+
       tapCountRef.current += 1;
       if (tapTimerRef.current) clearTimeout(tapTimerRef.current);
 
@@ -709,6 +712,7 @@ export default function HomePage() {
                     key={item}
                     type="button"
                     onClick={() => {
+                      unlockAudio();
                       setTarget(item);
                       speak(`${item} 안내를 시작합니다`);
                       setTimeout(() => startNavigation(item), 1000);
@@ -866,14 +870,14 @@ export default function HomePage() {
             >
               {isQuerying ? "확인 중" : "현재 위치 확인"}
             </button>
-            <button type="button" onClick={stopNavigation} style={styles.secondaryAction}>
+            <button type="button" onClick={() => { unlockAudio(); stopNavigation(); }} style={styles.secondaryAction}>
               중지
             </button>
           </div>
         ) : (
           <button
             type="button"
-            onClick={() => startNavigation()}
+            onClick={() => { unlockAudio(); startNavigation(); }}
             disabled={navState === "arrived" || !target.trim()}
             style={{
               ...styles.startAction,
