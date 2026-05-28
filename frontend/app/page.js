@@ -9,7 +9,13 @@ const API_BASE = (
 ).replace(/\/+$/, "");
 const WS_URL = API_BASE.replace(/^http/, "ws") + "/ws/navigate";
 
-const CAPTURE_INTERVAL_MS = 500;
+// 모바일(iOS/Android) 감지 — LTE 환경에서 프레임 크기·주기 자동 조정
+const IS_MOBILE = typeof navigator !== "undefined" &&
+  /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+
+const CAPTURE_INTERVAL_MS   = IS_MOBILE ? 800  : 500;   // 모바일: 800ms, PC: 500ms
+const CAPTURE_JPEG_QUALITY  = IS_MOBILE ? 0.6  : 0.8;   // 모바일: 낮은 화질로 전송량 감소
+const CAPTURE_WIDTH         = IS_MOBILE ? 480  : 640;   // 모바일: 480px
 const MAX_WS_BUFFERED_BYTES = 512 * 1024;
 
 const PRESET_TARGETS = ["화장실", "강의실", "엘리베이터"];
@@ -341,8 +347,8 @@ export default function HomePage() {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: {
           facingMode: { ideal: "environment" },
-          width: { ideal: 640 },
-          height: { ideal: 480 },
+          width:  { ideal: CAPTURE_WIDTH },
+          height: { ideal: IS_MOBILE ? 360 : 480 },
         },
       });
       if (videoRef.current) {
@@ -534,7 +540,7 @@ export default function HomePage() {
         ) {
           canvasRef.current?.toBlob((blob) => {
             if (blob && ws.readyState === WebSocket.OPEN) ws.send(blob);
-          }, "image/jpeg", 0.8);
+          }, "image/jpeg", CAPTURE_JPEG_QUALITY);
         }
       }, CAPTURE_INTERVAL_MS);
     };
@@ -678,19 +684,14 @@ export default function HomePage() {
 
         if (count === 1) {
           if (navState === "idle") {
-            speak("목적지를 말씀하세요");
-            // TTS 재생이 끝난 뒤 STT 시작 — 100ms 간격으로 폴링
-            // (TTS가 마이크에 잡히는 피드백 루프 방지)
+            // iOS: recognition.start()는 제스처로부터 1초 이내 호출해야 함.
+            // TTS 완료를 기다리면 제스처 윈도우를 벗어나 STT가 차단됨.
+            // → STT를 먼저 즉시 시작, TTS는 짧은 지연 후 재생 (피드백 최소화).
             if (sttTimerRef.current) clearInterval(sttTimerRef.current);
-            let waited = 0;
-            sttTimerRef.current = setInterval(() => {
-              waited += 100;
-              if (!isSpeakingRef.current || waited >= 3000) {
-                clearInterval(sttTimerRef.current);
-                sttTimerRef.current = null;
-                startSTT();
-              }
-            }, 100);
+            startSTT();               // 제스처 직후 즉시 — iOS 제스처 윈도우 준수
+            setTimeout(() => {
+              speak("말씀하세요");    // 짧은 안내음 (300ms 후) — STT와 겹치는 시간 최소화
+            }, 300);
           } else if (navState === "navigating") {
             queryDirection();
           }

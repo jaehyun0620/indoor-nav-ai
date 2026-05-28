@@ -109,19 +109,36 @@ export function useTTS() {
 
   /**
    * iOS/Android 자동재생 잠금 해제.
-   * 사용자 제스처(탭) 시점에 무음 오디오를 재생해서 브라우저 오디오 컨텍스트를 활성화한다.
-   * 이후 speak() 호출은 제스처 없이도 재생 가능.
+   * AudioContext 기반 unlock — iOS Safari는 new Audio() 방식으로는 unlock 안 됨.
+   * 사용자 제스처(탭·버튼) 직접 핸들러 안에서 호출해야 효과 있음.
    */
   const unlockAudio = useCallback(() => {
     if (audioUnlockedRef.current) return;
-    audioUnlockedRef.current = true;
     try {
-      const silentAudio = new Audio(
-        "data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA"
-      );
-      silentAudio.volume = 0.01;
-      silentAudio.play().catch(() => {});
-    } catch {}
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (AudioCtx) {
+        const ctx = new AudioCtx();
+        // 무음 버퍼 재생으로 오디오 컨텍스트 활성화
+        const buf = ctx.createBuffer(1, 1, 22050);
+        const src = ctx.createBufferSource();
+        src.buffer = buf;
+        src.connect(ctx.destination);
+        src.start(0);
+        ctx.resume().then(() => {
+          audioUnlockedRef.current = true;
+        }).catch(() => {
+          audioUnlockedRef.current = true; // 실패해도 플래그 설정
+        });
+      } else {
+        // AudioContext 미지원 → 구형 방식 fallback
+        const a = new Audio("data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA");
+        a.volume = 0.001;
+        a.play().catch(() => {});
+        audioUnlockedRef.current = true;
+      }
+    } catch {
+      audioUnlockedRef.current = true;
+    }
   }, []);
 
   /**
