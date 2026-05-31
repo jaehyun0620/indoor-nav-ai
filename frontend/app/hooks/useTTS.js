@@ -21,11 +21,20 @@ const API_URL = (
   process.env.NEXT_PUBLIC_API_URL || "https://indoor-nav-ai-production.up.railway.app"
 ).replace(/\/+$/, "");
 
+// iOS 오디오 요소 unlock용 짧은 무음 WAV
+const SILENT_WAV =
+  "data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA";
+
 export function useTTS() {
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [error, setError]           = useState(null);
 
-  const audioRef          = useRef(null);
+  // ⚠️ iOS(Chrome 포함 전부 WebKit)는 사용자 제스처 내에서 play()한 오디오 요소만
+  //    이후 프로그램 재생을 허용한다. 매번 new Audio()를 만들면 제스처 없는
+  //    WebSocket 콜백 재생이 차단됨 → 단일 요소를 재사용한다.
+  const audioRef          = useRef(null);   // 재사용하는 단일 HTMLAudioElement
+  const currentUrlRef     = useRef(null);   // 현재 src의 blob URL (정리용)
+  const audioCtxRef       = useRef(null);   // AudioContext (재사용)
   const lastTextRef       = useRef("");
   const isSpeakingRef     = useRef(false);  // isSpeaking state의 ref 미러
   const fetchingRef       = useRef(false);  // fetch 진행 중 여부
@@ -35,7 +44,16 @@ export function useTTS() {
   const duplicateTimerRef = useRef(null);   // 중복 방지 타이머 (누적 방지용)
   const speakStartRef     = useRef(0);      // 재생 시작 timestamp (watchdog용)
   const watchdogRef       = useRef(null);   // isSpeaking stuck 방지 watchdog 타이머
-  const audioUnlockedRef  = useRef(false);  // iOS audio context unlock 여부
+  const audioUnlockedRef  = useRef(false);  // iOS audio 요소 unlock 여부
+
+  /** 재사용할 단일 오디오 요소를 lazy 생성해 반환 */
+  const _ensureAudioEl = useCallback(() => {
+    if (!audioRef.current && typeof Audio !== "undefined") {
+      audioRef.current = new Audio();
+      audioRef.current.preload = "auto";
+    }
+    return audioRef.current;
+  }, []);
 
   /** isSpeaking state + ref 동시 업데이트 */
   const _setIsSpeaking = useCallback((val) => {
@@ -86,17 +104,20 @@ export function useTTS() {
     return false;
   }, []);
 
-  /** 재생 중인 오디오 중단 + 이벤트 핸들러 해제 */
+  /** 재생 중인 오디오 중단 + 이벤트 핸들러 해제 (요소 자체는 재사용 위해 유지) */
   const _stopAudio = useCallback(() => {
-    if (audioRef.current) {
-      const audio = audioRef.current;
+    const audio = audioRef.current;
+    if (audio) {
       // 이벤트 핸들러를 명시적으로 해제해 클로저 참조 누수 방지
       audio.onplay  = null;
       audio.onended = null;
       audio.onerror = null;
-      audio.pause();
-      try { URL.revokeObjectURL(audio.src); } catch {}
-      audioRef.current = null;
+      try { audio.pause(); } catch {}
+      // ⚠️ audioRef.current는 null로 만들지 않는다 — iOS unlock 상태를 보존하기 위함
+    }
+    if (currentUrlRef.current) {
+      try { URL.revokeObjectURL(currentUrlRef.current); } catch {}
+      currentUrlRef.current = null;
     }
   }, []);
 
@@ -109,48 +130,73 @@ export function useTTS() {
 
   /**
    * iOS/Android 자동재생 잠금 해제.
-   * AudioContext 기반 unlock — iOS Safari는 new Audio() 방식으로는 unlock 안 됨.
-   * 사용자 제스처(탭·버튼) 직접 핸들러 안에서 호출해야 효과 있음.
+   * 반드시 사용자 제스처(탭·버튼) 직접 핸들러 안에서 호출해야 효과 있음.
+   *
+   * 핵심: 실제 재생에 쓰는 단일 HTMLAudioElement를 제스처 내에서 한 번 play()해
+   * unlock한다. 이후 WebSocket 콜백 등 제스처 밖에서도 같은 요소로 재생 가능.
+   * (매번 new Audio()를 만들면 iOS가 차단 → 첫 메시지만 나오던 원인)
+   *
+   * 매 제스처마다 호출해도 안전(멱등) — 백그라운드 복귀 후 재-unlock에도 도움.
    */
   const unlockAudio = useCallback(() => {
-    if (audioUnlockedRef.current) return;
+    // 1) HTMLAudioElement unlock — 실제 TTS 재생 경로와 동일한 요소
+    try {
+      const el = _ensureAudioEl();
+      if (el) {
+        el.muted = true;
+        el.src = SILENT_WAV;
+        const p = el.play();
+        if (p && p.then) {
+          p.then(() => {
+            try { el.pause(); el.currentTime = 0; } catch {}
+            el.muted = false;
+            audioUnlockedRef.current = true;
+          }).catch(() => {
+            el.muted = false;
+          });
+        } else {
+          el.muted = false;
+          audioUnlockedRef.current = true;
+        }
+      }
+    } catch {}
+
+    // 2) AudioContext도 resume (Web Audio 경로 보조 — 무해)
     try {
       const AudioCtx = window.AudioContext || window.webkitAudioContext;
       if (AudioCtx) {
-        const ctx = new AudioCtx();
-        // 무음 버퍼 재생으로 오디오 컨텍스트 활성화
-        const buf = ctx.createBuffer(1, 1, 22050);
-        const src = ctx.createBufferSource();
-        src.buffer = buf;
-        src.connect(ctx.destination);
-        src.start(0);
-        ctx.resume().then(() => {
-          audioUnlockedRef.current = true;
-        }).catch(() => {
-          audioUnlockedRef.current = true; // 실패해도 플래그 설정
-        });
-      } else {
-        // AudioContext 미지원 → 구형 방식 fallback
-        const a = new Audio("data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA");
-        a.volume = 0.001;
-        a.play().catch(() => {});
-        audioUnlockedRef.current = true;
+        if (!audioCtxRef.current) audioCtxRef.current = new AudioCtx();
+        const ctx = audioCtxRef.current;
+        if (ctx.state === "suspended") ctx.resume().catch(() => {});
       }
-    } catch {
-      audioUnlockedRef.current = true;
-    }
-  }, []);
+    } catch {}
+  }, [_ensureAudioEl]);
 
   /**
    * Blob → Audio 재생.
+   * ⚠️ new Audio()를 만들지 않고 unlock된 단일 요소(audioRef)를 재사용한다.
+   *    매번 새 요소를 만들면 iOS가 제스처 밖 재생을 차단함 (핵심 수정).
    * 재생이 끝나면 pendingRef에 대기 중인 메시지를 자동으로 재생한다.
    */
   const _playBlob = useCallback((blob) => {
     _stopNative();
-    _stopAudio();
-    const url   = URL.createObjectURL(blob);
-    const audio = new Audio(url);
-    audioRef.current = audio;
+
+    const audio = _ensureAudioEl();
+    if (!audio) { _setIsSpeaking(false); return; }
+
+    // 이전 재생/핸들러/URL 정리 (요소 자체는 유지)
+    audio.onended = null;
+    audio.onerror = null;
+    try { audio.pause(); } catch {}
+    if (currentUrlRef.current) {
+      try { URL.revokeObjectURL(currentUrlRef.current); } catch {}
+    }
+
+    const url = URL.createObjectURL(blob);
+    currentUrlRef.current = url;
+    audio.src    = url;
+    audio.muted  = false;
+    audio.volume = 1.0;
 
     // ⚠️ isSpeaking을 동기로 즉시 true 설정 — onplay(비동기)를 기다리면
     //    speak()의 finally 블록이 먼저 실행돼 pending이 잘못 발화되는 경쟁 조건 발생.
@@ -167,18 +213,22 @@ export function useTTS() {
 
     audio.onended = () => {
       _setIsSpeaking(false);
-      URL.revokeObjectURL(url);
       _playNextPending();
     };
     audio.onerror = () => {
       _setIsSpeaking(false);
       _playNextPending();
     };
-    audio.play().catch(() => {
-      _setIsSpeaking(false);
-      _playNextPending();
-    });
-  }, [_stopAudio, _stopNative, _setIsSpeaking]);
+    const p = audio.play();
+    if (p && p.catch) {
+      p.catch((err) => {
+        // iOS에서 unlock 안 된 경우 등 — Web Speech로 폴백되도록 false 처리
+        console.warn(`[TTS] audio.play() 실패: ${err?.message || err}`);
+        _setIsSpeaking(false);
+        _playNextPending();
+      });
+    }
+  }, [_stopNative, _ensureAudioEl, _setIsSpeaking]);
 
   /**
    * Naver Clova Voice — 백엔드 프록시 경유.
@@ -355,7 +405,15 @@ export function useTTS() {
         audioRef.current.onplay = null;
         audioRef.current.onended = null;
         audioRef.current.onerror = null;
-        audioRef.current.pause();
+        try { audioRef.current.pause(); } catch {}
+      }
+      if (currentUrlRef.current) {
+        try { URL.revokeObjectURL(currentUrlRef.current); } catch {}
+        currentUrlRef.current = null;
+      }
+      if (audioCtxRef.current) {
+        try { audioCtxRef.current.close(); } catch {}
+        audioCtxRef.current = null;
       }
       _stopNative();
     };
