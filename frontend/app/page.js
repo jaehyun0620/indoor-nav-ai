@@ -839,47 +839,80 @@ export default function HomePage() {
       <main
         style={{
           minHeight: "100vh",
-          background: "#080b10",
+          background: "linear-gradient(180deg, #0b0f15 0%, #080b10 100%)",
           color: "#f8fafc",
           fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
           display: "flex",
           flexDirection: "column",
           alignItems: "center",
-          justifyContent: "center",
+          justifyContent: "space-between",
           textAlign: "center",
-          padding: "32px 24px",
+          padding: "48px 24px 28px",
           cursor: "pointer",
         }}
         onClick={handleStart}
         role="button"
         aria-label="화면을 탭하여 시작하고 사용법을 들으세요"
       >
-        <div style={{ fontSize: 56, marginBottom: 24 }} aria-hidden="true">🧭</div>
-        <h1 style={{ fontSize: 26, fontWeight: 850, margin: "0 0 12px" }}>
-          실내 보조 안내
-        </h1>
-        <p style={{ fontSize: 16, color: "#94a3b8", lineHeight: 1.6, margin: "0 0 36px", maxWidth: 320 }}>
-          시각장애인을 위한 실내 길 안내입니다.<br />
-          화장실 · 강의실 · 엘리베이터를 찾아드려요.
-        </p>
-        <div
-          style={{
-            border: "2px solid #2563eb",
-            background: "#10254a",
-            color: "#bfdbfe",
-            borderRadius: 16,
-            padding: "22px 28px",
-            fontSize: 20,
-            fontWeight: 800,
-            boxShadow: "0 0 32px rgba(37,99,235,0.35)",
-          }}
-        >
-          화면을 탭하여 시작
+        {/* 상단: 프로젝트 식별 라벨 */}
+        <div style={{
+          fontSize: 12,
+          letterSpacing: "0.18em",
+          fontWeight: 600,
+          color: "#5b6b80",
+          textTransform: "uppercase",
+        }}>
+          Indoor Navigation Assistant
         </div>
-        <p style={{ fontSize: 13, color: "#64748b", marginTop: 28, lineHeight: 1.6, maxWidth: 300 }}>
-          탭하면 음성으로 사용법을 안내합니다.<br />
-          소리가 나오도록 무음 모드를 해제해 주세요.
-        </p>
+
+        {/* 중앙: 타이틀 + 설명 + CTA */}
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
+          <div style={{
+            width: 44,
+            height: 4,
+            borderRadius: 2,
+            background: "#2563eb",
+            marginBottom: 26,
+          }} />
+          <h1 style={{ fontSize: 30, fontWeight: 800, letterSpacing: "-0.01em", margin: "0 0 14px" }}>
+            실내 보조 안내
+          </h1>
+          <p style={{ fontSize: 16, color: "#9aa7b8", lineHeight: 1.7, margin: "0 0 40px", maxWidth: 320 }}>
+            시각장애인을 위한 실내 길 안내 서비스입니다.<br />
+            화장실 · 강의실 · 엘리베이터를 찾아드립니다.
+          </p>
+          <div
+            style={{
+              border: "1px solid #3b6fe0",
+              background: "#1d4ed8",
+              color: "#ffffff",
+              borderRadius: 12,
+              padding: "18px 40px",
+              fontSize: 18,
+              fontWeight: 700,
+            }}
+          >
+            화면을 탭하여 시작
+          </div>
+          <p style={{ fontSize: 13, color: "#64748b", marginTop: 22, lineHeight: 1.7, maxWidth: 300 }}>
+            탭하면 음성으로 사용법을 안내합니다.<br />
+            소리가 나오도록 무음 모드를 해제해 주세요.
+          </p>
+        </div>
+
+        {/* 하단: 캡스톤 정보 */}
+        <div style={{
+          fontSize: 12,
+          color: "#475569",
+          lineHeight: 1.6,
+          borderTop: "1px solid #161c26",
+          paddingTop: 16,
+          width: "100%",
+          maxWidth: 360,
+        }}>
+          <div style={{ fontWeight: 600, color: "#64748b" }}>2026 지능시스템 캡스톤 디자인</div>
+          <div>실시간 장애물 감지 · VLM 기반 방향 안내 시스템</div>
+        </div>
       </main>
     );
   }
