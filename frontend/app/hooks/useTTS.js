@@ -166,16 +166,28 @@ export function useTTS() {
     audio.play().catch(() => _setIsSpeaking(false));
   }, [_stopAudio, _stopNative, _setIsSpeaking]);
 
-  /** Naver Clova Voice — 백엔드 프록시 경유 */
+  /** Naver Clova Voice — 백엔드 프록시 경유 (5초 타임아웃) */
   const _speakNaver = useCallback(async (text, signal) => {
+    // 브라우저 fetch 자체에 5초 타임아웃 — Railway 지연 시 빠르게 Web Speech 폴백
+    const timeoutId = setTimeout(() => {
+      try { signal.throwIfAborted?.(); } catch {}
+    }, 5000);
+    const timeout = new AbortController();
+    const timeoutTimer = setTimeout(() => timeout.abort(), 5000);
+
     try {
       const form = new FormData();
       form.append("text", text);
 
+      // 사용자 abort + 5초 타임아웃 둘 다 감지
+      const combinedSignal = AbortSignal.any
+        ? AbortSignal.any([signal, timeout.signal])
+        : signal;
+
       const res = await fetch(`${API_URL}/tts`, {
         method: "POST",
         body: form,
-        signal,
+        signal: combinedSignal,
       });
 
       if (!res.ok) {
@@ -195,6 +207,9 @@ export function useTTS() {
       if (e.name === "AbortError") return false;
       console.warn(`[TTS] 네트워크 오류: ${e.message} → Web Speech 폴백`);
       return false;
+    } finally {
+      clearTimeout(timeoutTimer);
+      clearTimeout(timeoutId);
     }
   }, [_playBlob]);
 
@@ -235,10 +250,20 @@ export function useTTS() {
    * speak(text, urgent = false)
    *
    * urgent = false: 재생 중 or fetch 중 → pendingRef에 저장 후 리턴
-   * urgent = true:  pending 초기화 → fetch 취소 → 오디오 중단 → 즉시 재생
+   * urgent = true:  중복 체크 완화(100ms) → pending 초기화 → fetch 취소 → 즉시 재생
    */
   const speak = useCallback(async (text, urgent = false) => {
-    if (!text || _isDuplicate(text)) return;
+    if (!text) return;
+
+    // urgent는 중복 체크를 완화 — 100ms 이내 완전히 동일한 경우만 막음
+    // (경고음이 0.5초 쿨다운에 걸려 묵살되는 버그 수정)
+    if (urgent) {
+      if (text === lastTextRef.current && Date.now() - speakStartRef.current < 100) return;
+      lastTextRef.current = text;
+      speakStartRef.current = Date.now();
+    } else {
+      if (_isDuplicate(text)) return;
+    }
 
     if (!urgent) {
       if (isSpeakingRef.current || fetchingRef.current) {
@@ -268,6 +293,13 @@ export function useTTS() {
     } finally {
       fetchingRef.current = false;
       abortRef.current = null;
+      // fetch 완료 후 대기 중인 pending이 있고 현재 재생 중이 아니면 즉시 실행
+      const pending = pendingRef.current;
+      if (pending && !isSpeakingRef.current) {
+        pendingRef.current = null;
+        lastTextRef.current = "";
+        speakRef.current?.(pending, false);
+      }
     }
   }, [_isDuplicate, _speakNaver, _speakNative, _stopAudio, _stopNative, _setIsSpeaking]);
 
