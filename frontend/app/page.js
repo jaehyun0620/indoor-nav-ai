@@ -1005,25 +1005,6 @@ export default function HomePage() {
                   {direction.label}
                 </div>
               )}
-
-              {/* 청중용 자막: 현재 안내 멘트를 화면 하단에 크게 표시 */}
-              {decision?.tts_text && (
-                <div style={{
-                  position: "absolute",
-                  left: 10, right: 10, bottom: 10,
-                  background: "rgba(8,11,16,0.78)",
-                  border: `1px solid ${message.color}`,
-                  borderRadius: 10,
-                  padding: "10px 12px",
-                  fontSize: 15,
-                  fontWeight: 700,
-                  lineHeight: 1.4,
-                  color: "#f1f5f9",
-                  pointerEvents: "none",
-                }}>
-                  {decision.tts_text}
-                </div>
-              )}
             </>
           )}
 
