@@ -120,6 +120,15 @@ def _resize_for_vlm(image_bytes: bytes) -> bytes:
     return enc.tobytes()
 
 
+def _parse_meters(distance_str: str) -> Optional[float]:
+    """'약 2m', '2.5미터' 같은 문자열에서 미터 숫자를 추출. 실패 시 None."""
+    import re
+    if not distance_str:
+        return None
+    m = re.search(r"(\d+(?:\.\d+)?)", str(distance_str))
+    return float(m.group(1)) if m else None
+
+
 def _ocr_room_number(image_bytes: bytes) -> str:
     """
     프레임에서 강의실 번호를 OCR로 인식해 '○○○호' 문자열을 반환한다.
@@ -317,6 +326,12 @@ async def ws_navigate(websocket: WebSocket):
                     tts_out   = slow_res["tts_text"]
                     session.update_direction(direction)
                     mtype     = "guidance" if raw.get("goal_visible") else "searching"
+
+                    # 도착 임박 안내: 목표가 보이고 2m 이내면 강조 멘트 추가
+                    goal_m = _parse_meters(raw.get("goal_distance", ""))
+                    if raw.get("goal_visible") and goal_m is not None and goal_m <= 2.0:
+                        tts_out = f"거의 다 왔어요. {target}이 바로 앞에 있습니다."
+                        mtype   = "arrived_near"
 
                     # OCR: 강의실 목표이고 목표가 보이면 번호판을 읽어 안내에 덧붙임
                     if ENABLE_OCR and raw.get("goal_visible") and "강의실" in target:

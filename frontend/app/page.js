@@ -31,6 +31,7 @@ const MESSAGE = {
   warning: { label: "위험", color: "#ef4444", bg: "#2a0c0c" },
   caution: { label: "주의", color: "#f59e0b", bg: "#261a07" },
   guidance: { label: "안내", color: "#22c55e", bg: "#071f12" },
+  arrived_near: { label: "거의 도착", color: "#a855f7", bg: "#160d24" },
   searching: { label: "탐색", color: "#3b82f6", bg: "#071629" },
   orientation: { label: "파악 중", color: "#38bdf8", bg: "#071a26" },
   monitoring: { label: "감시", color: "#94a3b8", bg: "#0b1220" },
