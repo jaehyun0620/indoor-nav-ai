@@ -327,6 +327,7 @@ export default function HomePage() {
   const [started, setStarted] = useState(false);   // 온보딩 시작 화면 통과 여부
 
   const heartbeatRef         = useRef(null);  // 주행 중 주기적 안심 멘트 타이머
+  const recognizedRef        = useRef(false); // 이번 STT 세션에서 인식 성공했는지
   const intentionalCloseRef  = useRef(false); // 사용자가 의도적으로 중지했는지
   const reconnectTimerRef    = useRef(null);  // 재연결 예약 타이머
   const reconnectAttemptsRef = useRef(0);     // 재연결 시도 횟수
@@ -661,6 +662,7 @@ export default function HomePage() {
       .replace(/찾아줘|가고\s?싶어|어디야|알려줘|데려다줘|가자|가줘|보여줘|어디에|어디로/g, "")
       .trim();
     if (cleaned.length >= 1) {
+      recognizedRef.current = true;   // 인식 성공 → 빈 결과 재유도 멘트 차단
       setTarget(cleaned);
       speak(`${cleaned}으로 안내를 시작합니다`);
       resetSTT();
@@ -684,7 +686,8 @@ export default function HomePage() {
   useEffect(() => {
     const ended = prevListeningRef.current && !isListening;
     prevListeningRef.current = isListening;
-    if (ended && navState === "idle" && !transcript.trim()) {
+    // 인식 성공(recognizedRef) 시에는 transcript가 리셋돼 비어 보여도 재유도하지 않음
+    if (ended && navState === "idle" && !transcript.trim() && !recognizedRef.current) {
       speak("잘 못 들었어요. 화면을 한 번 탭하고 다시 말씀해 주세요.", true);
     }
   }, [isListening, transcript, navState, speak]);
@@ -789,6 +792,7 @@ export default function HomePage() {
             // TTS 완료를 기다리면 제스처 윈도우를 벗어나 STT가 차단됨.
             // → STT를 먼저 즉시 시작, TTS는 짧은 지연 후 재생 (피드백 최소화).
             if (sttTimerRef.current) clearInterval(sttTimerRef.current);
+            recognizedRef.current = false;  // 새 세션 — 인식 플래그 초기화
             startSTT();               // 제스처 직후 즉시 — iOS 제스처 윈도우 준수
             setTimeout(() => {
               speak("말씀하세요");    // 짧은 안내음 (300ms 후) — STT와 겹치는 시간 최소화
