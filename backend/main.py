@@ -48,6 +48,9 @@ from backend.modules.navigation_session import NavigationSession
 
 # ── 환경변수 ──────────────────────────────────────────────────────────────────
 WARN_COOLDOWN = float(os.getenv("WARN_COOLDOWN", "3.0"))
+# OCR(강의실 번호 인식)은 EasyOCR이 무겁고 CPU에서 느려 기본 비활성.
+# 데모/로컬에서 ENABLE_OCR=true 로 켤 수 있다.
+ENABLE_OCR = os.getenv("ENABLE_OCR", "false").lower() in ("1", "true", "yes", "on")
 
 # ── 싱글톤 ───────────────────────────────────────────────────────────────────
 fast_channel: Optional[FastChannel] = None
@@ -115,6 +118,30 @@ def _resize_for_vlm(image_bytes: bytes) -> bytes:
         img = cv2.resize(img, (size, int(h * size / w)), interpolation=cv2.INTER_AREA)
     _, enc = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, quality])
     return enc.tobytes()
+
+
+def _ocr_room_number(image_bytes: bytes) -> str:
+    """
+    프레임에서 강의실 번호를 OCR로 인식해 '○○○호' 문자열을 반환한다.
+    ENABLE_OCR=true 일 때만 호출되며, 실패/미인식 시 빈 문자열을 반환한다.
+    (EasyOCR은 무거우므로 asyncio.to_thread로 호출할 것)
+    """
+    try:
+        import cv2, numpy as np
+        from backend.modules.ocr_pipeline import read_text, extract_room_number
+
+        buf = np.frombuffer(image_bytes, dtype=np.uint8)
+        img = cv2.imdecode(buf, cv2.IMREAD_COLOR)
+        if img is None:
+            return ""
+        results = read_text(img)  # 전체 프레임 OCR
+        for item in sorted(results, key=lambda r: -r["conf"]):
+            room = extract_room_number(item["text"])
+            if room:
+                return room
+    except Exception as e:
+        log.warning(f"[OCR] 실패: {e}")
+    return ""
 
 
 def _empty_fast_output(error: str = "") -> dict:
@@ -287,16 +314,25 @@ async def ws_navigate(websocket: WebSocket):
                     )
                     direction = slow_res.get("confirmed_direction", "unknown")
                     raw       = slow_res.get("raw", {})
+                    tts_out   = slow_res["tts_text"]
                     session.update_direction(direction)
                     mtype     = "guidance" if raw.get("goal_visible") else "searching"
+
+                    # OCR: 강의실 목표이고 목표가 보이면 번호판을 읽어 안내에 덧붙임
+                    if ENABLE_OCR and raw.get("goal_visible") and "강의실" in target:
+                        room = await asyncio.to_thread(_ocr_room_number, image_bytes)
+                        if room:
+                            tts_out = f"{tts_out} {room}호가 보입니다."
+                            log.info(f"[QUERY→OCR] 강의실 번호 인식: {room}")
+
                     log.info(
                         f"[QUERY] visible={raw.get('goal_visible')} dir={direction} "
                         f"conf={raw.get('confidence')} dist={raw.get('goal_distance')} | "
-                        f"{slow_res['tts_text']!r}"
+                        f"{tts_out!r}"
                     )
                     await safe_send({
                         "message_type":   mtype,
-                        "tts_text":       slow_res["tts_text"],
+                        "tts_text":       tts_out,
                         "direction":      direction,
                         "query_response": True,
                         "debug": {
@@ -305,6 +341,7 @@ async def ws_navigate(websocket: WebSocket):
                             "fast_error": fast_error,
                             "goal_visible": raw.get("goal_visible", False),
                             "goal_direction": raw.get("goal_direction", "unknown"),
+                            "clock_position": raw.get("clock_position", ""),
                             "goal_distance": raw.get("goal_distance", "unknown"),
                             "confidence": raw.get("confidence", 0.0),
                             "reasoning": raw.get("reasoning", ""),

@@ -53,6 +53,7 @@ reasoning을 먼저 작성하고, tts_message는 그 reasoning을 구어체로 �
 {{
   "goal_visible": true 또는 false,
   "goal_direction": "left" 또는 "right" 또는 "straight" 또는 "unknown",
+  "clock_position": "시계 방위 (예: '10시', '12시', '2시') 또는 "",
   "goal_distance": "약 Xm" 또는 "unknown",
   "confidence": 0.0에서 1.0 사이 숫자,
   "reasoning": "이미지에서 직접 확인한 내용을 구체적으로 서술 (표지판 위치·색상, 문 번호, 복도 구조 등)",
@@ -65,16 +66,22 @@ reasoning을 먼저 작성하고, tts_message는 그 reasoning을 구어체로 �
   좋은 예: "정면 복도 끝에 금속 엘리베이터 문과 버튼 패널이 보임, 약 8m 거리 추정"
   나쁜 예: "화장실이 왼쪽에 있음" (시각 근거 없음 ❌)
 
+━━━ clock_position (시계 방위) 작성 기준 ━━━
+시각장애인 보행 안내의 표준 방식. 사용자 정면을 12시로 두고 목표물의 방위를 적으세요.
+  정면=12시, 살짝 왼쪽=11시, 왼쪽=10시, 완전 왼쪽=9시
+  살짝 오른쪽=1시, 오른쪽=2시, 완전 오른쪽=3시
+  목표물이 안 보이면 "" (빈 문자열)
+
 ━━━ tts_message 변환 규칙 ━━━
 
 [구조] reasoning을 바탕으로 두 문장:
-  첫 문장 = reasoning에서 확인한 시각 요소를 자연스럽게 전달
+  첫 문장 = reasoning에서 확인한 시각 요소 + 시계 방위를 자연스럽게 전달
   둘째 문장 = 지금 해야 할 행동
 
-[어투] 친근한 구어체, 70자 이내
-  ✅ "왼쪽 벽에 파란 화장실 표지판이 보여요. 왼쪽으로 꺾어서 약 5미터 이동하세요."
-  ✅ "복도 오른쪽 끝에 엘리베이터 문이 보여요. 오른쪽으로 쭉 걸어가세요."
-  ✅ "천장에 화장실 방향 화살표가 있어요. 화살표 방향인 왼쪽으로 이동하세요."
+[어투] 친근한 구어체, 70자 이내. 방향이 명확하면 시계 방위를 함께 말하세요.
+  ✅ "10시 방향 왼쪽 벽에 파란 화장실 표지판이 보여요. 왼쪽으로 꺾어서 약 5미터 가세요."
+  ✅ "12시 정면 복도 끝에 엘리베이터 문이 보여요. 앞으로 쭉 걸어가세요."
+  ✅ "천장에 화장실 방향 화살표가 있어요. 화살표 방향인 왼쪽, 10시 방향으로 이동하세요."
   ✅ "바로 앞에 사람이 있어요. 잠깐 멈추고 오른쪽으로 돌아서 가세요."
   ✅ "아직 표지판은 안 보이지만 복도가 오른쪽으로 이어져 있어요. 오른쪽으로 계속 가세요."
   ❌ "목적지는 왼쪽 방향입니다." (로봇 말투 금지)
@@ -109,6 +116,7 @@ ORIENTATION_PROMPT_TEMPLATE = """\
 {{
   "goal_visible": true 또는 false,
   "goal_direction": "left" 또는 "right" 또는 "straight" 또는 "unknown",
+  "clock_position": "목표물 시계 방위 (정면=12시, 왼쪽=10시, 오른쪽=2시 등) 또는 "",
   "scene_type": "현재 공간 유형 한 단어 (예: 복도, 로비, 계단실)",
   "confidence": 0.0에서 1.0 사이 숫자,
   "reasoning": "이미지에서 직접 눈으로 확인한 시각적 근거 구체적으로 서술 (위치·색상·글자 포함)",
@@ -268,6 +276,7 @@ def parse_vlm_response(response_text: str) -> Dict:
         "goal_distance": "unknown",
         "confidence": 0.0,
         "reasoning": "응답 파싱 실패",
+        "tts_message": "",
     }
 
     if not response_text:
@@ -286,15 +295,17 @@ def parse_vlm_response(response_text: str) -> Dict:
     except json.JSONDecodeError:
         return default
 
-    # confidence < 0.4 이면 direction 강제 unknown
+    # confidence < 0.6 이면 direction 강제 unknown
+    # 프롬프트/일관성 필터 기준과 맞춰 애매한 방향 안내가 TTS로 나가지 않게 한다.
     confidence = float(parsed.get("confidence", 0.0))
     direction = parsed.get("goal_direction", "unknown")
-    if confidence < 0.4:
+    if confidence < 0.6:
         direction = "unknown"
 
     return {
         "goal_visible": bool(parsed.get("goal_visible", False)),
         "goal_direction": direction,
+        "clock_position": str(parsed.get("clock_position", "")),
         "goal_distance": str(parsed.get("goal_distance", "unknown")),
         "confidence": confidence,
         "reasoning": str(parsed.get("reasoning", "")),
