@@ -151,10 +151,12 @@ export function useTTS() {
     const url   = URL.createObjectURL(blob);
     const audio = new Audio(url);
     audioRef.current = audio;
-    audio.onplay  = () => _setIsSpeaking(true);
-    audio.onended = () => {
-      _setIsSpeaking(false);
-      URL.revokeObjectURL(url);
+
+    // ⚠️ isSpeaking을 동기로 즉시 true 설정 — onplay(비동기)를 기다리면
+    //    speak()의 finally 블록이 먼저 실행돼 pending이 잘못 발화되는 경쟁 조건 발생.
+    _setIsSpeaking(true);
+
+    const _playNextPending = () => {
       const pending = pendingRef.current;
       if (pending) {
         pendingRef.current = null;
@@ -162,55 +164,81 @@ export function useTTS() {
         speakRef.current?.(pending, false);
       }
     };
-    audio.onerror = () => { _setIsSpeaking(false); };
-    audio.play().catch(() => _setIsSpeaking(false));
+
+    audio.onended = () => {
+      _setIsSpeaking(false);
+      URL.revokeObjectURL(url);
+      _playNextPending();
+    };
+    audio.onerror = () => {
+      _setIsSpeaking(false);
+      _playNextPending();
+    };
+    audio.play().catch(() => {
+      _setIsSpeaking(false);
+      _playNextPending();
+    });
   }, [_stopAudio, _stopNative, _setIsSpeaking]);
 
-  /** Naver Clova Voice — 백엔드 프록시 경유 (5초 타임아웃) */
+  /**
+   * Naver Clova Voice — 백엔드 프록시 경유.
+   * 네트워크 실패/타임아웃 시 1회 재시도 후에야 Web Speech로 폴백한다.
+   * (LTE 환경에서 일시적 지연으로 여성 목소리(폴백)로 떨어지는 현상 방지)
+   *
+   * @returns {Promise<boolean>} Naver 재생 성공 여부 (false면 호출부가 Web Speech 폴백)
+   */
   const _speakNaver = useCallback(async (text, signal) => {
-    // 브라우저 fetch 자체에 5초 타임아웃 — Railway 지연 시 빠르게 Web Speech 폴백
-    const timeoutId = setTimeout(() => {
-      try { signal.throwIfAborted?.(); } catch {}
-    }, 5000);
-    const timeout = new AbortController();
-    const timeoutTimer = setTimeout(() => timeout.abort(), 5000);
+    const MAX_ATTEMPTS = 2;     // 최초 1회 + 재시도 1회
+    const TIMEOUT_MS   = 8000;  // LTE에서 mp3(50KB+) 다운로드 여유 확보
 
-    try {
-      const form = new FormData();
-      form.append("text", text);
+    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+      // 사용자 abort(urgent 인터럽트)면 즉시 중단 — 재시도하지 않음
+      if (signal?.aborted) return false;
 
-      // 사용자 abort + 5초 타임아웃 둘 다 감지
-      const combinedSignal = AbortSignal.any
-        ? AbortSignal.any([signal, timeout.signal])
-        : signal;
+      const timeout      = new AbortController();
+      const timeoutTimer = setTimeout(() => timeout.abort(), TIMEOUT_MS);
 
-      const res = await fetch(`${API_URL}/tts`, {
-        method: "POST",
-        body: form,
-        signal: combinedSignal,
-      });
+      try {
+        const form = new FormData();
+        form.append("text", text);
 
-      if (!res.ok) {
-        console.warn(`[TTS] 백엔드 /tts 오류 ${res.status} → Web Speech 폴백`);
-        return false;
+        // 사용자 abort + 타임아웃 abort 둘 다 감지 (미지원 브라우저는 user signal만)
+        const combinedSignal =
+          typeof AbortSignal !== "undefined" && AbortSignal.any
+            ? AbortSignal.any([signal, timeout.signal].filter(Boolean))
+            : signal;
+
+        const res = await fetch(`${API_URL}/tts`, {
+          method: "POST",
+          body: form,
+          signal: combinedSignal,
+        });
+
+        if (!res.ok) {
+          console.warn(`[TTS] /tts ${res.status} (시도 ${attempt + 1})`);
+          continue; // 재시도
+        }
+
+        const blob = await res.blob();
+        if (!blob || blob.size === 0) {
+          console.warn(`[TTS] /tts 빈 응답 (시도 ${attempt + 1})`);
+          continue; // 재시도
+        }
+
+        _playBlob(blob);
+        return true;
+      } catch (e) {
+        // 사용자가 의도적으로 abort한 경우(urgent 인터럽트)는 재시도 없이 종료
+        if (signal?.aborted) return false;
+        console.warn(`[TTS] 네트워크 오류 (시도 ${attempt + 1}): ${e.message}`);
+        // 타임아웃 등 → 다음 attempt로 재시도
+      } finally {
+        clearTimeout(timeoutTimer);
       }
-
-      const blob = await res.blob();
-      if (!blob || blob.size === 0) {
-        console.warn("[TTS] 백엔드 /tts 빈 응답 → Web Speech 폴백");
-        return false;
-      }
-
-      _playBlob(blob);
-      return true;
-    } catch (e) {
-      if (e.name === "AbortError") return false;
-      console.warn(`[TTS] 네트워크 오류: ${e.message} → Web Speech 폴백`);
-      return false;
-    } finally {
-      clearTimeout(timeoutTimer);
-      clearTimeout(timeoutId);
     }
+
+    console.warn("[TTS] Naver 재시도 모두 실패 → Web Speech 폴백");
+    return false;
   }, [_playBlob]);
 
   /** Web Speech API — 폴백 엔진 */
@@ -283,22 +311,31 @@ export function useTTS() {
 
     setError(null);
     fetchingRef.current = true;
-    abortRef.current = new AbortController();
+    // ⚠️ 이 speak 호출의 컨트롤러를 로컬 변수로 고정.
+    //    abortRef.current를 직접 검사하면, 그 사이 urgent 인터럽트가 새 컨트롤러로
+    //    교체했을 때 "abort 안 됨"으로 오판해 끊긴 메시지를 Web Speech(여성)로
+    //    재생하는 버그 발생. → 반드시 로컬 myController로 판정한다.
+    const myController = new AbortController();
+    abortRef.current = myController;
 
     try {
-      const ok = await _speakNaver(text, abortRef.current.signal);
-      if (!ok && !abortRef.current?.signal?.aborted) {
+      const ok = await _speakNaver(text, myController.signal);
+      // 내 fetch가 abort된 경우(urgent 인터럽트 등)에는 Web Speech 폴백을 하지 않음
+      if (!ok && !myController.signal.aborted) {
         _speakNative(text);
       }
     } finally {
-      fetchingRef.current = false;
-      abortRef.current = null;
-      // fetch 완료 후 대기 중인 pending이 있고 현재 재생 중이 아니면 즉시 실행
-      const pending = pendingRef.current;
-      if (pending && !isSpeakingRef.current) {
-        pendingRef.current = null;
-        lastTextRef.current = "";
-        speakRef.current?.(pending, false);
+      // abortRef가 여전히 내 컨트롤러일 때만 정리 (인터럽트로 교체됐으면 건드리지 않음)
+      if (abortRef.current === myController) {
+        fetchingRef.current = false;
+        abortRef.current = null;
+        // fetch 완료 후 대기 중인 pending이 있고 현재 재생 중이 아니면 즉시 실행
+        const pending = pendingRef.current;
+        if (pending && !isSpeakingRef.current) {
+          pendingRef.current = null;
+          lastTextRef.current = "";
+          speakRef.current?.(pending, false);
+        }
       }
     }
   }, [_isDuplicate, _speakNaver, _speakNative, _stopAudio, _stopNative, _setIsSpeaking]);
