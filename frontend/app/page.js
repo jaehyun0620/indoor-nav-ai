@@ -21,10 +21,10 @@ const MAX_WS_BUFFERED_BYTES = 512 * 1024;
 const PRESET_TARGETS = ["화장실", "강의실", "엘리베이터"];
 
 const DIRECTION = {
-  left: { label: "왼쪽", mark: "<" },
-  right: { label: "오른쪽", mark: ">" },
-  straight: { label: "직진", mark: "^" },
-  unknown: { label: "확인 중", mark: "-" },
+  left: { label: "왼쪽", mark: "←" },
+  right: { label: "오른쪽", mark: "→" },
+  straight: { label: "직진", mark: "↑" },
+  unknown: { label: "확인 중", mark: "·" },
 };
 
 const MESSAGE = {
@@ -323,6 +323,14 @@ export default function HomePage() {
   const [cameraError, setCameraError] = useState(null);
   const [cameraReady, setCameraReady] = useState(false);
   const [debugInfo, setDebugInfo] = useState("초기 상태");
+  const [started, setStarted] = useState(false);   // 온보딩 시작 화면 통과 여부
+
+  const heartbeatRef         = useRef(null);  // 주행 중 주기적 안심 멘트 타이머
+  const intentionalCloseRef  = useRef(false); // 사용자가 의도적으로 중지했는지
+  const reconnectTimerRef    = useRef(null);  // 재연결 예약 타이머
+  const reconnectAttemptsRef = useRef(0);     // 재연결 시도 횟수
+  const connectWSRef         = useRef(null);  // 최신 connectWS 참조 (onclose에서 사용)
+  const navTargetRef         = useRef("");    // 재연결 시 사용할 목적지
 
   const { transcript, isListening, start: startSTT, stop: stopSTT, reset: resetSTT } = useSTT();
   const { speak, stop: stopTTS, clearPending, unlockAudio, isSpeaking } = useTTS();
@@ -334,6 +342,29 @@ export default function HomePage() {
 
   // isSpeaking → ref 미러 (setTimeout 클로저에서 최신 값 참조용)
   useEffect(() => { isSpeakingRef.current = isSpeaking; }, [isSpeaking]);
+
+  // ── 주행 중 주기적 안심 멘트 (heartbeat) ────────────────────────────────
+  // 시각장애인 사용자는 화면을 볼 수 없으므로, 한동안 아무 안내가 없으면
+  // 시스템이 멈춘 건지 알 수 없다. 18초간 발화가 없으면 작동 중임을 알린다.
+  useEffect(() => {
+    if (!isRunning) {
+      if (heartbeatRef.current) clearInterval(heartbeatRef.current);
+      heartbeatRef.current = null;
+      return;
+    }
+    heartbeatRef.current = setInterval(() => {
+      const idle = Date.now() - lastSpokenRef.current.at;
+      if (idle > 18000 && !isSpeakingRef.current && !isQuerying) {
+        speak("계속 안내 중입니다. 방향이 궁금하면 화면을 한 번 탭하세요.", false);
+        lastSpokenRef.current = { text: "heartbeat", type: "heartbeat", at: Date.now() };
+      }
+    }, 3000);
+    return () => {
+      if (heartbeatRef.current) clearInterval(heartbeatRef.current);
+      heartbeatRef.current = null;
+    };
+  }, [isRunning, isQuerying, speak]);
+
   const messageType = decision?.message_type || (isRunning ? "monitoring" : "ready");
   const message = MESSAGE[messageType] || MESSAGE.monitoring;
 
@@ -362,9 +393,11 @@ export default function HomePage() {
       const message = `카메라 오류: ${e.message}`;
       setCameraError(message);
       setDebugInfo(message);
+      // 시각장애인 사용자를 위해 카메라 실패도 음성으로 안내
+      speak("카메라를 열 수 없습니다. 카메라 권한을 허용했는지 확인해 주세요.", true);
       return false;
     }
-  }, []);
+  }, [speak]);
 
   const stopCamera = useCallback(() => {
     videoRef.current?.srcObject?.getTracks().forEach((track) => track.stop());
@@ -444,6 +477,7 @@ export default function HomePage() {
     }
 
     if (message_type === "arrived") {
+      intentionalCloseRef.current = true;   // 도착 → 자동 재연결 막기
       stopTTS();
       speak(tts_text, true);
       setNavState("arrived");
@@ -477,6 +511,10 @@ export default function HomePage() {
     if (message_type === "warning") {
       // 같은 경고 텍스트는 5초 쿨다운 — 매 프레임 interrupt로 음성이 잘리는 현상 방지
       if (tts_text !== prev.text || elapsed > 5000) {
+        // 촉각 채널 — 시끄러운 환경/소리 못 듣는 경우 대비 강한 진동
+        if (typeof navigator !== "undefined" && navigator.vibrate) {
+          navigator.vibrate([120, 60, 120]);
+        }
         speak(tts_text, true);
         lastSpokenRef.current = { text: tts_text, type: message_type, at: now };
       }
@@ -514,23 +552,27 @@ export default function HomePage() {
     }
   }, [speak, stopTTS, stopFrameCache, stopCamera]);
 
-  const startNavigation = useCallback(async (navTarget) => {
-    const dest = (navTarget || target).trim();
-    if (!dest) return;
-    const ok = await startCamera();
-    if (!ok) return;
-    setDebugInfo(`WebSocket 연결 시도: ${WS_URL}`);
+  // WebSocket 연결 수립 (최초 연결 + 재연결 공용)
+  const connectWS = useCallback((dest, isReconnect = false) => {
+    setDebugInfo(isReconnect ? "재연결 시도 중" : `WebSocket 연결 시도: ${WS_URL}`);
     const ws = new WebSocket(WS_URL);
     wsRef.current = ws;
 
     ws.onopen = () => {
-      setDebugInfo("WebSocket 연결됨");
+      reconnectAttemptsRef.current = 0;
+      setDebugInfo(isReconnect ? "재연결됨" : "WebSocket 연결됨");
       ws.send(JSON.stringify({ action: "start", target: dest }));
       setNavState("navigating");
       setWsConnected(true);
-      setDecision(null);
       setIsQuerying(false);
-      lastSpokenRef.current = { text: "", type: "", at: 0 };
+      if (!isReconnect) {
+        setDecision(null);
+        lastSpokenRef.current = { text: "", type: "", at: 0 };
+      } else {
+        // 재연결 성공을 사용자에게 음성으로 알림
+        speak("다시 연결되었습니다. 계속 안내합니다.", true);
+        lastSpokenRef.current = { text: "재연결", type: "monitoring", at: Date.now() };
+      }
       startFrameCache();
       intervalRef.current = setInterval(() => {
         if (
@@ -555,24 +597,60 @@ export default function HomePage() {
     };
 
     ws.onerror = () => {
-      console.error(`[WS] 연결 실패: ${WS_URL}`);
-      setCameraError("서버 연결 오류");
-      setDebugInfo(`WebSocket 연결 실패: ${WS_URL}`);
-      setNavState("idle");
+      console.error(`[WS] 연결 오류: ${WS_URL}`);
+      setDebugInfo(`WebSocket 오류: ${WS_URL}`);
       setWsConnected(false);
+      // onclose가 이어서 호출되므로 재연결은 onclose에서 처리
     };
 
     ws.onclose = (event) => {
-      if (event.code !== 1000) {
-        console.warn(`[WS] 연결 종료: ${WS_URL} code=${event.code}`);
-      }
       setDebugInfo(`WebSocket 종료: code=${event.code}`);
       clearInterval(intervalRef.current);
       stopFrameCache();
       setIsQuerying(false);
       setWsConnected(false);
+
+      // 사용자가 의도적으로 중지한 경우 → 재연결 안 함
+      if (intentionalCloseRef.current) {
+        intentionalCloseRef.current = false;
+        setNavState("idle");
+        return;
+      }
+
+      // 예기치 않은 끊김 → 자동 재연결 (최대 5회, 지수 백오프)
+      if (reconnectAttemptsRef.current < 5) {
+        reconnectAttemptsRef.current += 1;
+        const attempt = reconnectAttemptsRef.current;
+        const delay = Math.min(1000 * attempt, 4000);
+        if (attempt === 1) {
+          speak("연결이 끊겼습니다. 다시 연결하고 있습니다. 잠시만 기다려 주세요.", true);
+        }
+        setDebugInfo(`재연결 예약 (${attempt}/5, ${delay}ms)`);
+        reconnectTimerRef.current = setTimeout(() => {
+          connectWSRef.current?.(dest, true);
+        }, delay);
+      } else {
+        // 재연결 한계 초과 → 안내 종료
+        setNavState("idle");
+        setCameraError("서버에 연결할 수 없습니다.");
+        speak("서버에 다시 연결하지 못했습니다. 안내를 종료합니다.", true);
+      }
     };
-  }, [target, startCamera, startFrameCache, stopFrameCache, handleMessage]);
+  }, [startFrameCache, stopFrameCache, handleMessage, speak]);
+
+  // onclose 콜백에서 최신 connectWS를 참조하기 위한 ref 동기화
+  useEffect(() => { connectWSRef.current = connectWS; }, [connectWS]);
+
+  const startNavigation = useCallback(async (navTarget) => {
+    const dest = (navTarget || target).trim();
+    if (!dest) return;
+    navTargetRef.current = dest;
+    intentionalCloseRef.current = false;
+    reconnectAttemptsRef.current = 0;
+    const ok = await startCamera();
+    if (!ok) return;
+    connectWS(dest, false);
+  }, [target, startCamera, connectWS]);
 
   // STT 인식 완료 → 목적지 설정 + TTS 재생 완료 후 안내 시작
   // (startNavigation 정의 이후에 위치해야 const TDZ 오류가 발생하지 않음)
@@ -583,7 +661,7 @@ export default function HomePage() {
       .trim();
     if (cleaned.length >= 1) {
       setTarget(cleaned);
-      speak(`${cleaned} 안내를 시작합니다`);
+      speak(`${cleaned}으로 안내를 시작합니다`);
       resetSTT();
       // TTS "○○ 안내를 시작합니다" 재생이 끝난 뒤 startNavigation 호출
       // → 폴링으로 isSpeaking이 false가 되면 실행 (최대 4초 대기)
@@ -598,7 +676,26 @@ export default function HomePage() {
     }
   }, [transcript, navState, speak, resetSTT, startNavigation]);
 
+  // ── STT 인식 실패/빈 결과 재안내 ────────────────────────────────────────
+  // 음성 인식이 끝났는데 아무것도 못 알아들으면, 시각장애인 사용자가 멈춰버린
+  // 줄 알 수 있으므로 다시 말하도록 음성으로 유도한다.
+  const prevListeningRef = useRef(false);
+  useEffect(() => {
+    const ended = prevListeningRef.current && !isListening;
+    prevListeningRef.current = isListening;
+    if (ended && navState === "idle" && !transcript.trim()) {
+      speak("잘 못 들었어요. 화면을 한 번 탭하고 다시 말씀해 주세요.", true);
+    }
+  }, [isListening, transcript, navState, speak]);
+
   const stopNavigation = useCallback(() => {
+    // 의도적 중지 → onclose의 자동 재연결을 막는다
+    intentionalCloseRef.current = true;
+    if (reconnectTimerRef.current) {
+      clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
+    reconnectAttemptsRef.current = 0;
     const ws = wsRef.current;
     if (ws?.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ action: "stop" }));
@@ -653,6 +750,9 @@ export default function HomePage() {
     clearInterval(intervalRef.current);
     if (tapTimerRef.current) clearTimeout(tapTimerRef.current);
     if (sttTimerRef.current) clearInterval(sttTimerRef.current);
+    if (heartbeatRef.current) clearInterval(heartbeatRef.current);
+    if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+    intentionalCloseRef.current = true;  // 언마운트 시 재연결 방지
     wsRef.current?.close();
     stopCamera();
   }, [stopCamera]);
@@ -710,8 +810,85 @@ export default function HomePage() {
     [navState, target, speak, startSTT, queryDirection, startNavigation, stopNavigation]
   );
 
+  // ── 온보딩 시작 화면 진입 ───────────────────────────────────────────────
+  // 첫 탭에서 ① iOS 오디오 unlock ② 사용법 음성 안내를 함께 처리한다.
+  const handleStart = useCallback(() => {
+    unlockAudio();
+    setStarted(true);
+    speak(
+      "시각장애인 실내 길 안내입니다. " +
+      "화장실, 강의실, 엘리베이터로 안내할 수 있어요. " +
+      "목적지를 말하려면 화면을 한 번, " +
+      "안내를 시작하거나 멈추려면 화면을 두 번 탭하세요."
+    );
+  }, [unlockAudio, speak]);
+
+  // ── 도움말 재안내 (길게 누르기) ─────────────────────────────────────────
+  const speakHelp = useCallback(() => {
+    if (navState === "navigating") {
+      speak("안내 중입니다. 방향이 궁금하면 화면을 한 번, 안내를 멈추려면 두 번 탭하세요.", true);
+    } else {
+      speak("목적지를 말하려면 화면을 한 번, 안내를 시작하려면 두 번 탭하세요.", true);
+    }
+  }, [navState, speak]);
+
+  // ── 온보딩 시작 화면 ───────────────────────────────────────────────────
+  if (!started) {
+    return (
+      <main
+        style={{
+          minHeight: "100vh",
+          background: "#080b10",
+          color: "#f8fafc",
+          fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          justifyContent: "center",
+          textAlign: "center",
+          padding: "32px 24px",
+          cursor: "pointer",
+        }}
+        onClick={handleStart}
+        role="button"
+        aria-label="화면을 탭하여 시작하고 사용법을 들으세요"
+      >
+        <div style={{ fontSize: 56, marginBottom: 24 }} aria-hidden="true">🧭</div>
+        <h1 style={{ fontSize: 26, fontWeight: 850, margin: "0 0 12px" }}>
+          실내 보조 안내
+        </h1>
+        <p style={{ fontSize: 16, color: "#94a3b8", lineHeight: 1.6, margin: "0 0 36px", maxWidth: 320 }}>
+          시각장애인을 위한 실내 길 안내입니다.<br />
+          화장실 · 강의실 · 엘리베이터를 찾아드려요.
+        </p>
+        <div
+          style={{
+            border: "2px solid #2563eb",
+            background: "#10254a",
+            color: "#bfdbfe",
+            borderRadius: 16,
+            padding: "22px 28px",
+            fontSize: 20,
+            fontWeight: 800,
+            boxShadow: "0 0 32px rgba(37,99,235,0.35)",
+          }}
+        >
+          화면을 탭하여 시작
+        </div>
+        <p style={{ fontSize: 13, color: "#64748b", marginTop: 28, lineHeight: 1.6, maxWidth: 300 }}>
+          탭하면 음성으로 사용법을 안내합니다.<br />
+          소리가 나오도록 무음 모드를 해제해 주세요.
+        </p>
+      </main>
+    );
+  }
+
   return (
-    <main style={styles.page} onClick={handleScreenTap}>
+    <main
+      style={styles.page}
+      onClick={handleScreenTap}
+      onContextMenu={(e) => { e.preventDefault(); speakHelp(); }}
+    >
       <div style={styles.shell}>
         <header style={styles.header}>
           <div>
@@ -815,15 +992,35 @@ export default function HomePage() {
 
               {isQuerying && (
                 <div style={styles.directionOverlay}>
-                  <span style={styles.directionMark}>...</span>
+                  <span style={styles.directionMark}>···</span>
                   분석 중
                 </div>
               )}
 
-              {!isQuerying && decision?.query_response && decision?.direction !== "unknown" && (
+              {/* 방향 화살표: query 응답뿐 아니라 orientation/guidance에서도 표시 */}
+              {!isQuerying && decision?.direction && decision.direction !== "unknown" && (
                 <div style={styles.directionOverlay}>
                   <span style={styles.directionMark}>{direction.mark}</span>
                   {direction.label}
+                </div>
+              )}
+
+              {/* 청중용 자막: 현재 안내 멘트를 화면 하단에 크게 표시 */}
+              {decision?.tts_text && (
+                <div style={{
+                  position: "absolute",
+                  left: 10, right: 10, bottom: 10,
+                  background: "rgba(8,11,16,0.78)",
+                  border: `1px solid ${message.color}`,
+                  borderRadius: 10,
+                  padding: "10px 12px",
+                  fontSize: 15,
+                  fontWeight: 700,
+                  lineHeight: 1.4,
+                  color: "#f1f5f9",
+                  pointerEvents: "none",
+                }}>
+                  {decision.tts_text}
                 </div>
               )}
             </>
